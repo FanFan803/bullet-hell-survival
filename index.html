@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>彈幕生存 v4.3.1</title>
+<title>彈幕生存 v5</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;user-select:none}
@@ -425,7 +425,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   <div id="mnp-home" class="mn-page active">
     <div class="oi" style="justify-content:center">
       <div class="logo logo-anim" style="margin-top:32px">彈幕生存</div>
-      <div class="logo-s">BULLET HELL SURVIVAL · v4.3.1</div>
+      <div class="logo-s">BULLET HELL SURVIVAL · v5.0</div>
       <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:320px;margin-top:30px">
         <button class="mb-nav pri" onclick="showMenuPage('mnp-free')">
           <span class="mn-icon">▶</span>
@@ -865,7 +865,8 @@ canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   for(let i=0;i<e.changedTouches.length;i++){
     const t=e.changedTouches[i];
-    if(moveTouchId===null){moveTouchId=t.identifier;applyMove(t.clientX,t.clientY);}
+    // 只記錄 ID，不立即 applyMove（避免手指點下瞬間傳送）
+    if(moveTouchId===null)moveTouchId=t.identifier;
   }
 },{passive:false});
 canvas.addEventListener('touchmove',e=>{
@@ -884,6 +885,12 @@ canvas.addEventListener('touchcancel',e=>{
   for(let i=0;i<e.changedTouches.length;i++){
     if(e.changedTouches[i].identifier===moveTouchId)moveTouchId=null;
   }
+},{passive:false});
+
+// 炸彈按鈕：用 touchstart 直接觸發（避免多點觸控時 click 事件被壓制）
+mbBb.addEventListener('touchstart',e=>{
+  e.preventDefault(); // 阻止後續 click 事件重複觸發
+  if((gstate==='playing'||gstate==='paused')&&!isStartingCount)useBomb();
 },{passive:false});
 
 document.addEventListener('keydown',e=>{
@@ -1363,7 +1370,7 @@ function onHit(b){
   shakeF=14;shakeStr=8;
   if(!comboLockOn)resetCombo();
   if(lives<=0)endGame();
-  else{iframes=200;showNotif(`💔 剩 ${lives} 命！`,'#ff2d78');}
+  else{iframes=60;showNotif(`💔 剩 ${lives} 命！`,'#ff2d78');}
 }
 
 function endGame(){
@@ -1395,7 +1402,7 @@ let stageMode=false;
 let stageIdx=0;
 let stageTimer=0;
 // 預設全50關解鎖
-const _defaultClears=Array.from({length:50},(_,i)=>i);
+const _defaultClears=[];
 let stageBestClears=(()=>{try{const s=JSON.parse(localStorage.getItem('bhStageClears'));if(Array.isArray(s)&&s.length>0)return s;}catch(e){}return [..._defaultClears];})();
 let stageTotalScore=0;
 
@@ -1524,7 +1531,6 @@ function buildStageUI(){
 }
 
 function checkStarUnlock(){
-  return true; // TEST: always unlocked
   for(let i=0;i<50;i++)if((stageStarsEarned[i]||0)<3)return false;
   return true;
 }
@@ -1549,8 +1555,8 @@ function rebuildStageGrid(){
     btn.innerHTML=`
       <span style="position:absolute;top:7px;right:8px;font-size:.52rem;color:${starCol}">${starStr}</span>
       <span style="display:block;font-family:Orbitron,monospace;font-size:.78rem;font-weight:700;color:${st.isSecret?'#39ff14':cleared?'#ffd700':locked?'rgba(255,255,255,.3)':'#fff'};margin-bottom:3px">${locked?'🔒 ':cleared?'✓ ':st.isSecret?'★ ':''}${st.name}</span>
-      <span style="display:block;font-size:.6rem;color:rgba(255,255,255,.42);margin-bottom:4px">${st.sub}</span>
-      <span style="font-size:.55rem;color:rgba(255,255,255,.3)">⏱${st.dur}秒 · ❤${st.lives} 💥${st.bombs}</span>
+      <span style="display:block;font-size:.6rem;color:${locked?'rgba(255,100,100,.45)':'rgba(255,255,255,.42)'};margin-bottom:4px">${locked?`通過第 ${i} 關即可解鎖`:st.sub}</span>
+      <span style="font-size:.55rem;color:rgba(255,255,255,.3)">${locked?'':'⏱'+st.dur+'秒 · ❤'+st.lives+' 💥'+st.bombs}</span>
       <div style="position:absolute;bottom:9px;left:9px;display:flex;gap:3px;flex-wrap:wrap">
         <span style="font-size:.48rem;padding:1px 4px;border-radius:3px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.32)">${DIFF[st.diff].label.split(' ')[0]}</span>
       </div>`;
@@ -1966,7 +1972,7 @@ function renderFrame(dt){
     }
     
     if(!frozenOn && !isStartingCount){
-      if(b.homing){const tx=player.x-b.x,ty=player.y-b.y,d=Math.hypot(tx,ty)||1;const mx=cfg2.speed*speedM*.85;const sp=Math.hypot(b.dx,b.dy)||mx;const t=Math.min(1,0.12*dt);const nx=(b.dx/sp)*(1-t)+(tx/d)*t;const ny=(b.dy/sp)*(1-t)+(ty/d)*t;const nl=Math.hypot(nx,ny)||1;b.dx=nx/nl*mx;b.dy=ny/nl*mx;}
+      if(b.homing){const tx=player.x-b.x,ty=player.y-b.y,d=Math.hypot(tx,ty)||1;const mx=cfg2.speed*speedM*.85;const sp=Math.hypot(b.dx,b.dy)||mx;const turn=d<80?0.5:0.2;const t=Math.min(1,turn*dt);const nx=(b.dx/sp)*(1-t)+(tx/d)*t;const ny=(b.dy/sp)*(1-t)+(ty/d)*t;const nl=Math.hypot(nx,ny)||1;b.dx=nx/nl*mx;b.dy=ny/nl*mx;}
       if(b.boomerang){if(b.y>H()*.38&&b.bDir===1)b.bDir=-1;b.dy+=b.bDir*0.22*dt;}
       if(b.zigzag){b.zigT+=dt;if(b.zigT>16){b.zigDir*=-1;b.zigT=0;}b.dx=b.zigDir*cfg2.speed*speedM*.5;}
       if(b.bounce){if(b.x-b.r<0){b.x=b.r;b.dx=Math.abs(b.dx);}if(b.x+b.r>W()){b.x=W()-b.r;b.dx=-Math.abs(b.dx);}}
@@ -2278,7 +2284,7 @@ function confirmBagSelect(targetIdx,type,skip){
   _doStartStage(targetIdx,skip?null:type);
 }
 
-// ══ Stage 51 四方向生成 ══
+// ══ Stage 51 四方向扇形三發 ══
 function spawnWaveStage51(){
   if(isStartingCount)return;
   const cfg=stageCfgOverride||DIFF[lastDiff];
@@ -2286,26 +2292,31 @@ function spawnWaveStage51(){
   const r=cfg.bR;
   const w=W(),h=H();
   if(Math.random()<0.025)spawnItem();
-  const edge=Math.floor(Math.random()*4); // 0=top,1=bottom,2=left,3=right
-  const pat=pick(cfg.patterns);
-  _spawnPat=pat;
-  if(edge===0){
-    spawnPatternWith(pat,spd,r,cfg,w,h); // 正常上方
-  }else if(edge===1){
-    // 下方向上：選一個簡單彈幕，翻轉 y 座標與 dy
-    const cx=rand(r+20,w-r-20);
-    const count=Math.floor(Math.random()*3)+1;
-    for(let i=0;i<count;i++)addB(cx+rand(-30,30),h+r+5,rand(-.4,.4),-spd,r,cfg);
-  }else if(edge===2){
-    // 左方向右
-    const cy=rand(h*.15,h*.75);
-    const count=Math.floor(Math.random()*3)+1;
-    for(let i=0;i<count;i++)addB(-r-5,cy+rand(-25,25),spd,rand(-.3,.3),r,cfg);
-  }else{
-    // 右方向左
-    const cy=rand(h*.15,h*.75);
-    const count=Math.floor(Math.random()*3)+1;
-    for(let i=0;i<count;i++)addB(w+r+5,cy+rand(-25,25),-spd,rand(-.3,.3),r,cfg);
+  _spawnPat='fan3';
+
+  // 偶爾發射雙組扇形（增加密度）
+  const groups=Math.random()<0.3?2:1;
+  for(let g=0;g<groups;g++){
+    const edge=Math.floor(Math.random()*4);
+    // 扇形展開角（側面偏移量 = spd * spread）
+    const spread=0.38+Math.random()*0.18; // 扇形開度 0.38~0.56
+    if(edge===0){ // 上方→下
+      const cx=rand(r+50,w-r-50);
+      const offset=g*rand(-80,80);
+      for(let i=-1;i<=1;i++) addB(cx+offset,-(r+5), i*spread*spd, spd, r, cfg);
+    }else if(edge===1){ // 下方→上
+      const cx=rand(r+50,w-r-50);
+      const offset=g*rand(-80,80);
+      for(let i=-1;i<=1;i++) addB(cx+offset, h+r+5, i*spread*spd, -spd, r, cfg);
+    }else if(edge===2){ // 左→右
+      const cy=rand(h*.2,h*.72);
+      const offset=g*rand(-60,60);
+      for(let i=-1;i<=1;i++) addB(-(r+5), cy+offset, spd, i*spread*spd, r, cfg);
+    }else{ // 右→左
+      const cy=rand(h*.2,h*.72);
+      const offset=g*rand(-60,60);
+      for(let i=-1;i<=1;i++) addB(w+r+5, cy+offset, -spd, i*spread*spd, r, cfg);
+    }
   }
 }
 </script>
