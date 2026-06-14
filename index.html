@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>彈幕生存 v5</title>
+<title>彈幕生存 v6</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;user-select:none}
@@ -240,6 +240,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .desktop #hd{display:flex!important}
 .desktop #db-bm,.desktop #db-ps{display:flex!important}
 .mobile .kp{display:none!important}
+#wrap.cm-active #hd,#wrap.cm-active #db-bm,#wrap.cm-active #db-ps,#wrap.cm-active #mb-bb,#wrap.cm-active #mb-pb{display:none!important}
 
 /* banner container & animations */
 .banner-container {
@@ -425,7 +426,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   <div id="mnp-home" class="mn-page active">
     <div class="oi" style="justify-content:center">
       <div class="logo logo-anim" style="margin-top:32px">彈幕生存</div>
-      <div class="logo-s">BULLET HELL SURVIVAL · v5.0</div>
+      <div class="logo-s">BULLET HELL SURVIVAL · v6.0</div>
       <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:320px;margin-top:30px">
         <button class="mb-nav pri" onclick="showMenuPage('mnp-free')">
           <span class="mn-icon">▶</span>
@@ -442,6 +443,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
         <button class="mb-nav" onclick="showMenuPage('mnp-settings')">
           <span class="mn-icon">⚙</span>
           <div class="mn-txt"><span>設定 SETTINGS</span><span class="mn-sub">無敵練習模式 · 全螢幕</span></div>
+        </button>
+        <button class="mb-nav" style="border-color:rgba(255,80,80,.45);color:#ff6666;appearance:none;-webkit-appearance:none" onclick="showBattleMenu()">
+          <span class="mn-icon">⚔</span>
+          <div class="mn-txt"><span>戰鬥模式 COMBAT</span><span class="mn-sub">手槍·盾牌·彈幕格鬥</span></div>
         </button>
       </div>
       <div id="mn-bests" style="margin-top:30px;width:100%;max-width:320px"></div>
@@ -599,10 +604,19 @@ const DPR=Math.min(window.devicePixelRatio||1,2);
 function W(){return canvas.offsetWidth;}
 function H(){return canvas.offsetHeight;}
 function resizeCv(){
+  if(W()===0||H()===0)return; // 分頁縮小/隱藏時 offsetWidth/Height 會變 0，跳過避免畫面崩潰
   canvas.width=W()*DPR; canvas.height=H()*DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 resizeCv();
+
+// 分頁被縮小/切換到背景時暫停遊戲時間，避免恢復時 dt 暴增造成計時器錯亂（看起來像無敵）
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){
+    lastTS=0;
+    cmLastTS=0;
+  }
+});
 
 const $=id=>document.getElementById(id);
 const hdSc=$('hd-sc'),hdCb=$('hd-cb'),hdLv=$('hd-lv'),hdBm=$('hd-bm'),
@@ -611,6 +625,7 @@ const mbSc=$('mb-sc'),mbCb=$('mb-cb'),mbLv=$('mb-lv'),mbBm=$('mb-bm'),
       mbDif=$('mb-dif'),mbInv=$('mb-inv');
 const mnUI=$('mn'),goUI=$('go'),puUI=$('pu');
 const dbBm=$('db-bm'),dbPs=$('db-ps'),mbBb=$('mb-bb'),mbPb=$('mb-pb');
+const hdEl=$('hd');
 const goT=$('go-t'),goSc=$('go-sc'),goBv=$('go-bv'),goSt=$('go-st'),goMd=$('go-md');
 const puD=$('pu-d'),puBm=$('pu-bm');
 const $mile=$('mile'),$nf=$('nf'),$phb=$('phb');
@@ -865,8 +880,7 @@ canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   for(let i=0;i<e.changedTouches.length;i++){
     const t=e.changedTouches[i];
-    // 只記錄 ID，不立即 applyMove（避免手指點下瞬間傳送）
-    if(moveTouchId===null)moveTouchId=t.identifier;
+    if(moveTouchId===null){moveTouchId=t.identifier;applyMove(t.clientX,t.clientY);}
   }
 },{passive:false});
 canvas.addEventListener('touchmove',e=>{
@@ -887,14 +901,30 @@ canvas.addEventListener('touchcancel',e=>{
   }
 },{passive:false});
 
-// 炸彈按鈕：用 touchstart 直接觸發（避免多點觸控時 click 事件被壓制）
-mbBb.addEventListener('touchstart',e=>{
-  e.preventDefault(); // 阻止後續 click 事件重複觸發
-  if((gstate==='playing'||gstate==='paused')&&!isStartingCount)useBomb();
-},{passive:false});
-
 document.addEventListener('keydown',e=>{
   const k=e.key;
+  // Combat mode WASD
+  if(gstate==='combat'){
+    keysDown[k]=true;
+    if(k==='f'||k==='F'){e.preventDefault();doCombatFSkill();}
+    else if(k==='p'||k==='P')toggleCombatPause();
+    else if(k==='Escape'){cleanupCombat();showMenu();}
+    else if(k>='1'&&k<='4'){
+      cmGunType=Number(k)-1;cmGunCD=0;
+      const g=CM_GUNS[cmSelGuns[cmGunType]];
+      const lv=cmGunLevels[cmSelGuns[cmGunType]];
+      showNotif(`${g.icon} 切換：${g.name}${lv>1?` Lv${lv}`:''}`,'#88ddff');
+    }
+    else if(k>='5'&&k<='8'){
+      const m=CM_MELEES[cmSelMelee];
+      showNotif(`${m.icon} 本場僅攜帶：${m.name}`,'#ffaaee');
+    }
+    else if(k==='q'||k==='Q'){
+      useCombatItem();
+    }
+    return;
+  }
+  if(k==='f'||k==='F'){}// prevent default below
   if(gstate==='playing'){
     if(k==='p'||k==='P')togglePause();
     else if(k==='b'||k==='B') { if(!isStartingCount) useBomb(); }
@@ -922,6 +952,7 @@ document.addEventListener('keydown',e=>{
     if(map[k])startGame(map[k]);
   }
 });
+document.addEventListener('keyup',e=>{keysDown[e.key]=false;});
 
 function toggleFullscreen(){
   if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
@@ -1315,6 +1346,23 @@ function showNotif(txt,col){
   $nf.textContent=txt;$nf.style.color=col||'#fff';$nf.style.opacity='1';
   clearTimeout(nfTO);nfTO=setTimeout(()=>$nf.style.opacity='0',1700);
 }
+// 戰鬥模式：畫面中央大型提示
+function showCmBigMsg(txt,col){
+  cmBigMsg={text:txt,color:col||'#fff',life:2.2};
+}
+// 戰鬥模式：玩家死亡判定，若有不死圖騰則消耗一個並復活
+function cmCheckDeath(){
+  if(cmPlayerHP>0)return;
+  if(cmReviveCharge>0){
+    cmReviveCharge--;
+    cmPlayerHP=50;
+    cmHitIF=1;cmPoisonT=0;cmBurnT=0;cmSlowT=0;
+    cmShakeF=14;cmShakeStr=8;
+    showCmBigMsg('🗿 不死圖騰發動！復活並回復50 HP','#ffdd44');
+  }else{
+    cmBattleOver(false);
+  }
+}
 
 function sweptCollide(b,dt){
   const pr=player.r*(miniOn?.5:bigOn?1.8:1)*HITBOX;
@@ -1370,7 +1418,7 @@ function onHit(b){
   shakeF=14;shakeStr=8;
   if(!comboLockOn)resetCombo();
   if(lives<=0)endGame();
-  else{iframes=60;showNotif(`💔 剩 ${lives} 命！`,'#ff2d78');}
+  else{iframes=200;showNotif(`💔 剩 ${lives} 命！`,'#ff2d78');}
 }
 
 function endGame(){
@@ -1402,7 +1450,7 @@ let stageMode=false;
 let stageIdx=0;
 let stageTimer=0;
 // 預設全50關解鎖
-const _defaultClears=[];
+const _defaultClears=Array.from({length:50},(_,i)=>i);
 let stageBestClears=(()=>{try{const s=JSON.parse(localStorage.getItem('bhStageClears'));if(Array.isArray(s)&&s.length>0)return s;}catch(e){}return [..._defaultClears];})();
 let stageTotalScore=0;
 
@@ -1531,6 +1579,7 @@ function buildStageUI(){
 }
 
 function checkStarUnlock(){
+  return true; // TEST: always unlocked
   for(let i=0;i<50;i++)if((stageStarsEarned[i]||0)<3)return false;
   return true;
 }
@@ -1555,8 +1604,8 @@ function rebuildStageGrid(){
     btn.innerHTML=`
       <span style="position:absolute;top:7px;right:8px;font-size:.52rem;color:${starCol}">${starStr}</span>
       <span style="display:block;font-family:Orbitron,monospace;font-size:.78rem;font-weight:700;color:${st.isSecret?'#39ff14':cleared?'#ffd700':locked?'rgba(255,255,255,.3)':'#fff'};margin-bottom:3px">${locked?'🔒 ':cleared?'✓ ':st.isSecret?'★ ':''}${st.name}</span>
-      <span style="display:block;font-size:.6rem;color:${locked?'rgba(255,100,100,.45)':'rgba(255,255,255,.42)'};margin-bottom:4px">${locked?`通過第 ${i} 關即可解鎖`:st.sub}</span>
-      <span style="font-size:.55rem;color:rgba(255,255,255,.3)">${locked?'':'⏱'+st.dur+'秒 · ❤'+st.lives+' 💥'+st.bombs}</span>
+      <span style="display:block;font-size:.6rem;color:rgba(255,255,255,.42);margin-bottom:4px">${st.sub}</span>
+      <span style="font-size:.55rem;color:rgba(255,255,255,.3)">⏱${st.dur}秒 · ❤${st.lives} 💥${st.bombs}</span>
       <div style="position:absolute;bottom:9px;left:9px;display:flex;gap:3px;flex-wrap:wrap">
         <span style="font-size:.48rem;padding:1px 4px;border-radius:3px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.32)">${DIFF[st.diff].label.split(' ')[0]}</span>
       </div>`;
@@ -1972,7 +2021,7 @@ function renderFrame(dt){
     }
     
     if(!frozenOn && !isStartingCount){
-      if(b.homing){const tx=player.x-b.x,ty=player.y-b.y,d=Math.hypot(tx,ty)||1;const mx=cfg2.speed*speedM*.85;const sp=Math.hypot(b.dx,b.dy)||mx;const turn=d<80?0.5:0.2;const t=Math.min(1,turn*dt);const nx=(b.dx/sp)*(1-t)+(tx/d)*t;const ny=(b.dy/sp)*(1-t)+(ty/d)*t;const nl=Math.hypot(nx,ny)||1;b.dx=nx/nl*mx;b.dy=ny/nl*mx;}
+      if(b.homing){const tx=player.x-b.x,ty=player.y-b.y,d=Math.hypot(tx,ty)||1;const mx=cfg2.speed*speedM*.85;const sp=Math.hypot(b.dx,b.dy)||mx;const t=Math.min(1,0.12*dt);const nx=(b.dx/sp)*(1-t)+(tx/d)*t;const ny=(b.dy/sp)*(1-t)+(ty/d)*t;const nl=Math.hypot(nx,ny)||1;b.dx=nx/nl*mx;b.dy=ny/nl*mx;}
       if(b.boomerang){if(b.y>H()*.38&&b.bDir===1)b.bDir=-1;b.dy+=b.bDir*0.22*dt;}
       if(b.zigzag){b.zigT+=dt;if(b.zigT>16){b.zigDir*=-1;b.zigT=0;}b.dx=b.zigDir*cfg2.speed*speedM*.5;}
       if(b.bounce){if(b.x-b.r<0){b.x=b.r;b.dx=Math.abs(b.dx);}if(b.x+b.r>W()){b.x=W()-b.r;b.dx=-Math.abs(b.dx);}}
@@ -2284,7 +2333,7 @@ function confirmBagSelect(targetIdx,type,skip){
   _doStartStage(targetIdx,skip?null:type);
 }
 
-// ══ Stage 51 四方向扇形三發 ══
+// ══ Stage 51 四方向生成 ══
 function spawnWaveStage51(){
   if(isStartingCount)return;
   const cfg=stageCfgOverride||DIFF[lastDiff];
@@ -2292,31 +2341,2115 @@ function spawnWaveStage51(){
   const r=cfg.bR;
   const w=W(),h=H();
   if(Math.random()<0.025)spawnItem();
-  _spawnPat='fan3';
+  const edge=Math.floor(Math.random()*4); // 0=top,1=bottom,2=left,3=right
+  const pat=pick(cfg.patterns);
+  _spawnPat=pat;
+  if(edge===0){
+    spawnPatternWith(pat,spd,r,cfg,w,h); // 正常上方
+  }else if(edge===1){
+    // 下方向上：選一個簡單彈幕，翻轉 y 座標與 dy
+    const cx=rand(r+20,w-r-20);
+    const count=Math.floor(Math.random()*3)+1;
+    for(let i=0;i<count;i++)addB(cx+rand(-30,30),h+r+5,rand(-.4,.4),-spd,r,cfg);
+  }else if(edge===2){
+    // 左方向右
+    const cy=rand(h*.15,h*.75);
+    const count=Math.floor(Math.random()*3)+1;
+    for(let i=0;i<count;i++)addB(-r-5,cy+rand(-25,25),spd,rand(-.3,.3),r,cfg);
+  }else{
+    // 右方向左
+    const cy=rand(h*.15,h*.75);
+    const count=Math.floor(Math.random()*3)+1;
+    for(let i=0;i<count;i++)addB(w+r+5,cy+rand(-25,25),-spd,rand(-.3,.3),r,cfg);
+  }
+}
 
-  // 偶爾發射雙組扇形（增加密度）
-  const groups=Math.random()<0.3?2:1;
-  for(let g=0;g<groups;g++){
-    const edge=Math.floor(Math.random()*4);
-    // 扇形展開角（側面偏移量 = spd * spread）
-    const spread=0.38+Math.random()*0.18; // 扇形開度 0.38~0.56
-    if(edge===0){ // 上方→下
-      const cx=rand(r+50,w-r-50);
-      const offset=g*rand(-80,80);
-      for(let i=-1;i<=1;i++) addB(cx+offset,-(r+5), i*spread*spd, spd, r, cfg);
-    }else if(edge===1){ // 下方→上
-      const cx=rand(r+50,w-r-50);
-      const offset=g*rand(-80,80);
-      for(let i=-1;i<=1;i++) addB(cx+offset, h+r+5, i*spread*spd, -spd, r, cfg);
-    }else if(edge===2){ // 左→右
-      const cy=rand(h*.2,h*.72);
-      const offset=g*rand(-60,60);
-      for(let i=-1;i<=1;i++) addB(-(r+5), cy+offset, spd, i*spread*spd, r, cfg);
-    }else{ // 右→左
-      const cy=rand(h*.2,h*.72);
-      const offset=g*rand(-60,60);
-      for(let i=-1;i<=1;i++) addB(w+r+5, cy+offset, -spd, i*spread*spd, r, cfg);
+// ═══════════════════════════════════════════
+// COMBAT MODE 戰鬥模式（重寫版）
+// ═══════════════════════════════════════════
+
+// ─── State（所有計時器單位：秒）───
+let cmStage=0,cmWave=0;
+let cmPlayerHP=100,cmPlayerMaxHP=100;
+let cmHitIF=0;       // 被打後無敵（秒）
+let cmBullets=[],cmPBullets=[],cmEnemies=[];
+let pvx=0,pvy=0,cmMX=400,cmMY=300;
+let keysDown={};
+let cmGunCD=0,cmDashCD=0,cmFiring=false;
+let cmGunType=0;
+let cmWaveTransition=false;
+let cmDashing=false,cmDashT=0,cmDashDx=0,cmDashDy=0,cmDashIF=0;
+let cmShielding=false;
+let cmParryWin=0; // 彈反窗口（秒）：舉盾期間點擊左鍵，短時間內命中藍色彈幕才能彈反
+let cmParryCD=0; // 彈反冷卻（秒）：成功彈反後需等待才能再次彈反
+const CM_PARRY_CD=1.5;
+let cmMeleeType=0,cmMeleeCD=0,cmMeleeFX=null;
+let cmTransitionTimer=0,cmTransitionAction=null;
+let cmCDMult=1;
+let cmSelStage=0,cmSelItem=0,cmSelMelee=0,cmSelWorld=0;
+let cmSelGuns=[0,1,2,3];
+let cmSelWeaponMenuGun=0;
+let cmAmbient=[];
+let cmPoisonT=0,cmSlowT=0,cmBurnT=0,cmSandT=0,cmSandTimer=0,cmPoisonTick=0,cmBurnTick=0;
+let cmSelFSkill=0;
+let cmItemCD=0,cmItemBuffT=0;
+let cmBurst=null;
+let cmGunFlash=0,cmGunHits=[];
+let cmPowerMult=1,cmPowerTO=null;
+let cmSpeedBoost=1,cmSpeedTO=null;
+let cmArmorOn=false,cmArmorTO=null;
+let cmPaused=false,cmRaf=null,cmLastTS=0;
+let cmShakeF=0,cmShakeStr=0;
+// 場上掉落道具
+let cmPickups=[],cmPickupTimer=6+Math.random()*4;
+let cmPkSpeedT=0,cmPkPowerT=0,cmPkArmorT=0,cmPkFreezeT=0,cmPkHasteT=0;
+let cmReviveCharge=0; // 不死圖騰：死亡時消耗一個，回復50 HP復活
+let cmBigMsg=null; // 中間大型提示 {text,color,life}
+// (old state removed — see new state above)
+
+// ─── Gun types（出戰前選4種，按 1-4 切換）───
+const CM_GUNS=[
+  {name:'手槍',icon:'🔫',cd:0.14,dmg:16,spd:18,spread:0,pellets:1,pierce:0,len:14,color:'#fff8cc',flash:'#ffee88'},
+  {name:'衝鋒槍',icon:'💢',cd:0.07,dmg:7,spd:17,spread:0.09,pellets:1,pierce:0,len:11,color:'#cdeaff',flash:'#88ccff'},
+  {name:'霰彈槍',icon:'💥',cd:0.5,dmg:9,spd:15,spread:0.46,pellets:6,pierce:0,len:10,color:'#ffd9b3',flash:'#ffaa44'},
+  {name:'狙擊槍',icon:'🎯',cd:1.4,dmg:90,spd:32,spread:0,pellets:1,pierce:4,len:22,color:'#ffd6ff',flash:'#ff66ff'},
+  {name:'火箭筒',icon:'🚀',cd:2.0,dmg:55,spd:11,spread:0,pellets:1,pierce:0,len:26,color:'#ffccaa',flash:'#ff7733',explode:true,blastR:135,blastDmg:45},
+  {name:'雷射槍',icon:'🔆',cd:0.25,dmg:18,spd:35,spread:0,pellets:1,pierce:10,len:30,color:'#ccffff',flash:'#66ffff',dual:true,dualOffset:10},
+  {name:'左輪槍',icon:'🔘',cd:0.35,dmg:35,spd:20,spread:0,pellets:1,pierce:1,len:16,color:'#ffe0c0',flash:'#ffaa55'},
+  {name:'機砲',icon:'⚙',cd:0.045,dmg:5,spd:16,spread:0.15,pellets:1,pierce:0,len:10,color:'#ddddff',flash:'#aaaaff'},
+  {name:'突擊步槍',icon:'🔰',cd:0.6,dmg:25,spd:19,spread:0.04,pellets:1,pierce:0,len:13,color:'#d9ffd9',flash:'#88ff99',burst:3,burstDelay:0.06}
+];
+
+// ─── Melee weapons（按 5-8 切換，右鍵發動）───
+const CM_MELEES=[
+  {name:'盾牌',icon:'🛡',mode:'shield',desc:'右鍵按住舉盾，可擋下🔵藍色彈幕；擋下瞬間點擊左鍵（0.12秒內）可彈反，彈反後有1.5秒冷卻'},
+  {name:'劍',icon:'⚔',mode:'strike',cd:0.4,dmg:35,range:90,arc:Math.PI*0.7,color:'#aaddff',desc:'中等範圍扇形揮砍，攻速與傷害平衡'},
+  {name:'重錘',icon:'🔨',mode:'strike',cd:1.0,dmg:70,range:78,arc:Math.PI*2,knock:16,color:'#ffaa44',desc:'360°全方位重擊＋強力擊退，但出招慢'},
+  {name:'匕首',icon:'🗡',mode:'strike',cd:0.18,dmg:14,range:70,line:true,width:16,color:'#ff88cc',desc:'直線快速突刺，攻速極快但單次傷害低'},
+  {name:'雙刀',icon:'🔪',mode:'strike',cd:0.3,dmg:24,range:85,arc:Math.PI*0.9,color:'#ffeeaa',desc:'寬扇形快速連斬，範圍與速度均衡'},
+  {name:'巨斧',icon:'🪓',mode:'strike',cd:1.4,dmg:95,range:88,arc:Math.PI*1.1,knock:22,color:'#ff6644',desc:'大範圍重斬＋超強擊退，傷害最高但CD最長'},
+  {name:'長槍',icon:'🔱',mode:'strike',cd:0.55,dmg:45,range:130,line:true,width:20,color:'#aaffcc',desc:'直線長距離突刺，範圍最遠，適合保持距離'},
+  {name:'拳套',icon:'🥊',mode:'strike',cd:0.15,dmg:10,range:55,arc:Math.PI*0.8,color:'#ffaacc',desc:'近距快拳，CD最短可連續出拳，但傷害與範圍最低'}
+];
+
+// ─── Useful items（出戰前選1個帶入，按Q主動使用，有冷卻）───
+const CM_ITEMS=[
+  {name:'不攜帶',icon:'🚫',desc:'不帶任何道具',cd:0,dur:0},
+  {name:'力量藥水',icon:'🍷',desc:'12秒內傷害 +30%（CD 20s）',cd:20,dur:12,use:()=>{cmPowerMult=1.3;}},
+  {name:'疾風之靴',icon:'💨',desc:'8秒內移速 +25%（CD 15s）',cd:15,dur:8,use:()=>{cmSpeedBoost=1.25;}},
+  {name:'鋼鐵護甲',icon:'🛡',desc:'8秒內受傷 -50%（CD 18s）',cd:18,dur:8,use:()=>{cmArmorOn=true;}},
+  {name:'急救包',icon:'❤',desc:'立即恢復50 HP（CD 30s）',cd:30,dur:0,use:()=>{cmPlayerHP=Math.min(cmPlayerMaxHP,cmPlayerHP+50);}},
+  {name:'戰術手環',icon:'⚡',desc:'10秒內衝刺/近戰冷卻 -25%（CD 20s）',cd:20,dur:10,use:()=>{cmCDMult=0.75;}}
+];
+
+// ─── 場上隨機掉落道具（戰鬥中地面隨機出現，接觸拾取）───
+const CM_PICKUPS=[
+  {id:'heal',icon:'🩹',color:'#44ff88',name:'醫療包',desc:'恢復20 HP',
+   apply:()=>{cmPlayerHP=Math.min(cmPlayerMaxHP,cmPlayerHP+20);showNotif('🩹 醫療包：恢復20 HP','#44ff88');}},
+  {id:'speed',icon:'💨',color:'#66ddff',name:'加速',desc:'5秒移速 +50%',
+   apply:()=>{cmPkSpeedT=Math.max(cmPkSpeedT,5);showNotif('💨 加速：移速提升！','#66ddff');}},
+  {id:'totem',icon:'🗿',color:'#ffdd44',name:'不死圖騰',desc:'死亡時自動復活並回復50 HP',
+   apply:()=>{cmReviveCharge++;showCmBigMsg('🗿 不死圖騰已準備！死亡時將自動復活','#ffdd44');}},
+  {id:'power',icon:'🔥',color:'#ff8844',name:'力量藥劇',desc:'8秒傷害 x1.5',
+   apply:()=>{cmPkPowerT=Math.max(cmPkPowerT,8);showNotif('🔥 力量藥劇：傷害提升！','#ff8844');}},
+  {id:'shield',icon:'🛡',color:'#88aaff',name:'護盾石',desc:'6秒受傷 -50%',
+   apply:()=>{cmPkArmorT=Math.max(cmPkArmorT,6);showNotif('🛡 護盾石：傷害減免！','#88aaff');}},
+  {id:'freeze',icon:'❄',color:'#aaffff',name:'冰封結晶',desc:'敵人凍結2秒',
+   apply:()=>{cmPkFreezeT=Math.max(cmPkFreezeT,2);showNotif('❄ 冰封結晶：敵人凍結！','#aaffff');}},
+  {id:'haste',icon:'⚡',color:'#ffff66',name:'過載電池',desc:'8秒冷卻時間 -30%',
+   apply:()=>{cmPkHasteT=Math.max(cmPkHasteT,8);showNotif('⚡ 過載電池：冷卻縮短！','#ffff66');}},
+  {id:'xp',icon:'💎',color:'#cc88ff',name:'經驗結晶',desc:'立即獲得15 XP',
+   apply:()=>{cmXP+=15;saveCombatProgress();showNotif('💎 經驗結晶：+15 XP','#cc88ff');}},
+  {id:'cleanse',icon:'✨',color:'#ffffff',name:'淨化之光',desc:'清除中毒/灼燒/凍傷',
+   apply:()=>{cmPoisonT=0;cmBurnT=0;cmSlowT=0;showNotif('✨ 淨化之光：異常狀態已清除','#ffffff');}},
+  {id:'bomb',icon:'💣',color:'#ff4444',name:'破壞核心',desc:'周圍敵人受到50傷害並擊退',
+   apply:()=>{
+     cmEnemies.forEach(e=>{
+       if(e.dead)return;
+       const d=Math.hypot(e.x-player.x,e.y-player.y);
+       if(d<260){hitCombatEnemy(e,50);const a=Math.atan2(e.y-player.y,e.x-player.x);e.x+=Math.cos(a)*40;e.y+=Math.sin(a)*40;}
+     });
+     cmShakeF=10;cmShakeStr=6;showNotif('💣 破壞核心：周圍敵人受創！','#ff4444');
+   }}
+];
+
+// ─── F鍵位移技能 ───
+const CM_FSKILLS=[
+  {name:'衝刺',icon:'💨',cd:2,color:'#4488ff',desc:'短距衝刺，0.5秒無敵，沿途敵人受到20傷害'},
+  {name:'瞬步突襲',icon:'🌀',cd:4,color:'#bb88ff',desc:'瞬間移動到指定方向，0.4秒無敵，範圍內敵人受到25傷害'},
+  {name:'衝擊波',icon:'💥',cd:6,color:'#ffaa44',desc:'原地釋放衝擊波，擊退並對周圍敵人造成35傷害'},
+  {name:'幻影突進',icon:'👥',cd:5,color:'#ffffff',desc:'高速突進，沿途敵人受到40傷害並被擊退，0.6秒無敵'},
+  {name:'生命躍動',icon:'💚',cd:7,color:'#44ff88',desc:'位移並恢復8點HP，0.5秒無敵'}
+];
+
+// ─── Enemy templates ───
+const CM_ETYPES={
+  fighter:{r:20,hp:160,spd:2.4,color:'#ff3344',rim:'#550011',ai:'chase',atkInt:1.6},
+  gunner:{r:18,hp:120,spd:1.8,color:'#ffaa33',rim:'#553300',ai:'kite',keepDist:230,atkInt:1.3},
+  brute:{r:28,hp:280,spd:1.4,color:'#aa44ff',rim:'#330055',ai:'chase',atkInt:2.4},
+  striker:{r:16,hp:90,spd:3.6,color:'#44ffaa',rim:'#005533',ai:'chase',atkInt:1.0},
+  miniboss:{r:42,hp:900,spd:1.6,color:'#ffcc00',rim:'#664400',ai:'boss',atkInt:1.4},
+  boss:{r:60,hp:2400,spd:1.1,color:'#ff3355',rim:'#550022',ai:'boss',atkInt:1.1}
+};
+
+// ─── Stage definitions（5關，最終關為大BOSS）───
+const COMBAT_STAGES=[
+  {name:'前哨',sub:'熱身 — 學會射擊、舉盾與衝刺',
+   waves:[
+     [{type:'fighter',ex:.3,ey:.22},{type:'fighter',ex:.7,ey:.22}],
+     [{type:'gunner',ex:.5,ey:.2},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}],
+     [{type:'striker',ex:.3,ey:.22},{type:'striker',ex:.7,ey:.22}],
+     [{type:'brute',ex:.5,ey:.22},{type:'fighter',ex:.2,ey:.25},{type:'fighter',ex:.8,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.8,ey:.22},{type:'brute',ex:.5,ey:.2}],
+     [{type:'miniboss',ex:.5,ey:.2}]
+   ]},
+  {name:'突破',sub:'敵人數量增加 — 學習分散火力與走位',
+   waves:[
+     [{type:'fighter',ex:.25,ey:.22},{type:'fighter',ex:.5,ey:.2},{type:'fighter',ex:.75,ey:.22}],
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'brute',ex:.5,ey:.2},{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.75,ey:.25}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2}],
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.8,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.6,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}]
+   ]},
+  {name:'重圍',sub:'高密度彈幕 — 考驗走位與道具運用',
+   waves:[
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.4,ey:.2},{type:'fighter',ex:.6,ey:.2},{type:'fighter',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.25},{type:'striker',ex:.4,ey:.22},{type:'striker',ex:.6,ey:.22},{type:'gunner',ex:.8,ey:.2}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.2,ey:.25}]
+   ]},
+  {name:'深淵',sub:'敵人強度全面提升 — 最終決戰前的試煉',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.6,ey:.25}],
+     [{type:'miniboss',ex:.3,ey:.18},{type:'gunner',ex:.7,ey:.22}],
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}]
+   ]},
+  {name:'終焉',sub:'最終決戰 — 大BOSS降臨',
+   waves:[
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}],
+     [{type:'boss',ex:.5,ey:.18}]
+   ]},
+  // ─── 第二世界：霓虹叢林 ───
+  {name:'叢林潛行',sub:'濃密叢林中的快速遭遇戰',
+   waves:[
+     [{type:'fighter',ex:.3,ey:.22},{type:'fighter',ex:.7,ey:.22}],
+     [{type:'gunner',ex:.5,ey:.2},{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.75,ey:.25}],
+     [{type:'brute',ex:.5,ey:.2},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}]
+   ]},
+  {name:'叢林伏擊',sub:'埋伏在暗處的敵人',
+   waves:[
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2}],
+     [{type:'striker',ex:.25,ey:.22},{type:'striker',ex:.5,ey:.2},{type:'striker',ex:.75,ey:.22}],
+     [{type:'brute',ex:.5,ey:.2},{type:'gunner',ex:.25,ey:.25},{type:'gunner',ex:.75,ey:.25}]
+   ]},
+  {name:'藤蔓迷宮',sub:'錯綜複雜的藤蔓地形',
+   waves:[
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.5,ey:.2},{type:'fighter',ex:.8,ey:.22}],
+     [{type:'brute',ex:.3,ey:.2},{type:'striker',ex:.7,ey:.25}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'striker',ex:.5,ey:.25}]
+   ]},
+  {name:'叢林深處',sub:'更危險的生物潛伏其中',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2},{type:'brute',ex:.5,ey:.25}]
+   ]},
+  {name:'叢林守衛',sub:'森林深處的守衛者',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'gunner',ex:.8,ey:.22}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}]
+   ]},
+  // ─── 第三世界：荒蕪沙地 ───
+  {name:'荒蕪沙地',sub:'灼熱沙塵中的伏擊',
+   waves:[
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'striker',ex:.25,ey:.22},{type:'striker',ex:.75,ey:.22},{type:'fighter',ex:.4,ey:.25},{type:'fighter',ex:.6,ey:.25}]
+   ]},
+  {name:'沙塵風暴',sub:'視野受限的沙塵中戰鬥',
+   waves:[
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'fighter',ex:.3,ey:.22},{type:'fighter',ex:.5,ey:.2},{type:'fighter',ex:.7,ey:.22}],
+     [{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.5,ey:.2},{type:'striker',ex:.75,ey:.25},{type:'gunner',ex:.5,ey:.18}]
+   ]},
+  {name:'廢墟遺跡',sub:'古老遺跡中的駐守部隊',
+   waves:[
+     [{type:'brute',ex:.5,ey:.2},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}],
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.8,ey:.2}],
+     [{type:'striker',ex:.3,ey:.22},{type:'striker',ex:.7,ey:.22},{type:'brute',ex:.5,ey:.25}]
+   ]},
+  {name:'沙丘要塞',sub:'堅固的要塞防線',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}]
+   ]},
+  {name:'沙海巨蟒',sub:'沙地深處的巨大威脅',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.25,ey:.25}]
+   ]},
+  // ─── 第四世界：極寒雪域 ───
+  {name:'極寒前線',sub:'冰封大地的精銳部隊',
+   waves:[
+     [{type:'fighter',ex:.25,ey:.22},{type:'fighter',ex:.5,ey:.2},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'striker',ex:.25,ey:.22},{type:'striker',ex:.75,ey:.22},{type:'gunner',ex:.4,ey:.25},{type:'gunner',ex:.6,ey:.25}]
+   ]},
+  {name:'冰封峽谷',sub:'狹窄峽谷中的快速突襲',
+   waves:[
+     [{type:'striker',ex:.3,ey:.22},{type:'striker',ex:.7,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'brute',ex:.5,ey:.2},{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.75,ey:.25}]
+   ]},
+  {name:'暴雪襲擊',sub:'視野受阻的暴雪戰場',
+   waves:[
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.4,ey:.2},{type:'fighter',ex:.6,ey:.2},{type:'fighter',ex:.8,ey:.22}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'striker',ex:.5,ey:.25}]
+   ]},
+  {name:'雪域要塞',sub:'雪域統治者的前哨守軍',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'gunner',ex:.25,ey:.25},{type:'gunner',ex:.75,ey:.25}]
+   ]},
+  {name:'冰原統治者',sub:'雪域的統治者降臨',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}]
+   ]},
+  // ─── 第五世界：熔岩核心 ───
+  {name:'熔岩前哨',sub:'通往核心的最後關卡',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.25,ey:.25},{type:'gunner',ex:.75,ey:.25}]
+   ]},
+  {name:'火山裂谷',sub:'熾熱裂谷中的精銳守軍',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'brute',ex:.5,ey:.25}]
+   ]},
+  {name:'熾焰要塞',sub:'核心前最後的防線',
+   waves:[
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.8,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.25,ey:.25}]
+   ]},
+  {name:'核心通道',sub:'通往核心的最終試煉',
+   waves:[
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22},{type:'gunner',ex:.5,ey:.18}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'brute',ex:.5,ey:.25}]
+   ]},
+  {name:'熔岩核心',sub:'熾熱深處的強大守衛',
+   waves:[
+     [{type:'boss',ex:.5,ey:.18}]
+   ]},
+  // ─── 第六世界：機械要塞 ───
+  {name:'鋼鐵走廊',sub:'機械守衛的第一道防線',
+   waves:[
+     [{type:'fighter',ex:.3,ey:.22},{type:'fighter',ex:.7,ey:.22}],
+     [{type:'gunner',ex:.5,ey:.2},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}],
+     [{type:'striker',ex:.3,ey:.22},{type:'striker',ex:.7,ey:.22}],
+     [{type:'brute',ex:.5,ey:.2},{type:'fighter',ex:.2,ey:.25},{type:'fighter',ex:.8,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.8,ey:.22},{type:'brute',ex:.5,ey:.2}]
+   ]},
+  {name:'自動炮塔',sub:'密集炮塔陣列，考驗閃避走位',
+   waves:[
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2}],
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'brute',ex:.5,ey:.2},{type:'gunner',ex:.25,ey:.25},{type:'gunner',ex:.75,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.75,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'striker',ex:.5,ey:.25}]
+   ]},
+  {name:'反應爐核心',sub:'高溫管線間的激戰',
+   waves:[
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.6,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}]
+   ]},
+  {name:'機械軍團',sub:'大量機體蜂擁而至',
+   waves:[
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.4,ey:.2},{type:'fighter',ex:.6,ey:.2},{type:'fighter',ex:.8,ey:.22}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.6,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.25,ey:.25},{type:'brute',ex:.75,ey:.25}]
+   ]},
+  {name:'機械統帥',sub:'巨型機械統帥降臨',
+   waves:[
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}],
+     [{type:'boss',ex:.5,ey:.18}]
+   ]},
+  // ─── 第七世界：深海遺跡 ───
+  {name:'沉沒迴廊',sub:'古老遺跡深處的潛伏者',
+   waves:[
+     [{type:'striker',ex:.3,ey:.22},{type:'striker',ex:.7,ey:.22},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'brute',ex:.5,ey:.2},{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.75,ey:.25}],
+     [{type:'fighter',ex:.25,ey:.22},{type:'fighter',ex:.75,ey:.22},{type:'gunner',ex:.4,ey:.18},{type:'gunner',ex:.6,ey:.18}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.5,ey:.25}]
+   ]},
+  {name:'暗礁伏擊',sub:'尖銳暗礁間的突襲戰',
+   waves:[
+     [{type:'gunner',ex:.3,ey:.2},{type:'gunner',ex:.7,ey:.2},{type:'brute',ex:.5,ey:.25}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.8,ey:.22}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.5,ey:.2},{type:'fighter',ex:.8,ey:.22},{type:'striker',ex:.35,ey:.25},{type:'striker',ex:.65,ey:.25}],
+     [{type:'gunner',ex:.25,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.75,ey:.2},{type:'brute',ex:.5,ey:.25}]
+   ]},
+  {name:'深海裂縫',sub:'裂縫中湧出的敵群',
+   waves:[
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2}],
+     [{type:'striker',ex:.2,ey:.22},{type:'striker',ex:.4,ey:.2},{type:'striker',ex:.6,ey:.2},{type:'striker',ex:.8,ey:.22},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.4,ey:.2},{type:'fighter',ex:.6,ey:.2},{type:'fighter',ex:.8,ey:.22}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.6,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'gunner',ex:.25,ey:.25},{type:'gunner',ex:.75,ey:.25}]
+   ]},
+  {name:'遺跡聖殿',sub:'守衛森嚴的遺跡核心',
+   waves:[
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.4,ey:.18},{type:'gunner',ex:.6,ey:.18},{type:'gunner',ex:.8,ey:.2}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'striker',ex:.15,ey:.22},{type:'striker',ex:.35,ey:.2},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.65,ey:.2},{type:'striker',ex:.85,ey:.22}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'gunner',ex:.4,ey:.25},{type:'gunner',ex:.6,ey:.25},{type:'fighter',ex:.5,ey:.18}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'striker',ex:.3,ey:.25},{type:'striker',ex:.7,ey:.25}]
+   ]},
+  {name:'深海霸主',sub:'甦醒的深海巨獸',
+   waves:[
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18},{type:'gunner',ex:.5,ey:.25},{type:'gunner',ex:.5,ey:.18}],
+     [{type:'boss',ex:.5,ey:.18}]
+   ]},
+  // ─── 第八世界：星界深淵 ───
+  {name:'星界入口',sub:'踏入未知的星界',
+   waves:[
+     [{type:'striker',ex:.25,ey:.22},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.75,ey:.22}],
+     [{type:'brute',ex:.3,ey:.2},{type:'brute',ex:.7,ey:.2},{type:'fighter',ex:.4,ey:.25},{type:'fighter',ex:.6,ey:.25}],
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.5,ey:.18},{type:'gunner',ex:.8,ey:.2},{type:'striker',ex:.35,ey:.25},{type:'striker',ex:.65,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'striker',ex:.3,ey:.25},{type:'striker',ex:.7,ey:.25}]
+   ]},
+  {name:'重力亂流',sub:'扭曲空間中的混戰',
+   waves:[
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.4,ey:.18},{type:'gunner',ex:.6,ey:.18},{type:'gunner',ex:.8,ey:.2},{type:'fighter',ex:.5,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'striker',ex:.15,ey:.22},{type:'striker',ex:.35,ey:.2},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.65,ey:.2},{type:'striker',ex:.85,ey:.22}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.35,ey:.25},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.65,ey:.25},{type:'gunner',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'brute',ex:.25,ey:.25},{type:'brute',ex:.75,ey:.25}]
+   ]},
+  {name:'虛空裂隙',sub:'裂隙湧出無盡敵潮',
+   waves:[
+     [{type:'striker',ex:.15,ey:.22},{type:'striker',ex:.3,ey:.2},{type:'striker',ex:.5,ey:.18},{type:'striker',ex:.7,ey:.2},{type:'striker',ex:.85,ey:.22}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2},{type:'gunner',ex:.4,ey:.25},{type:'gunner',ex:.6,ey:.25}],
+     [{type:'fighter',ex:.2,ey:.22},{type:'fighter',ex:.4,ey:.2},{type:'fighter',ex:.6,ey:.2},{type:'fighter',ex:.8,ey:.22},{type:'striker',ex:.5,ey:.25},{type:'striker',ex:.5,ey:.18}],
+     [{type:'miniboss',ex:.5,ey:.18},{type:'striker',ex:.25,ey:.25},{type:'striker',ex:.4,ey:.22},{type:'striker',ex:.6,ey:.22},{type:'striker',ex:.75,ey:.25}],
+     [{type:'brute',ex:.2,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.8,ey:.2},{type:'gunner',ex:.35,ey:.25},{type:'gunner',ex:.5,ey:.22},{type:'gunner',ex:.65,ey:.25}]
+   ]},
+  {name:'星界要塞',sub:'最終防線前的試煉',
+   waves:[
+     [{type:'miniboss',ex:.5,ey:.18},{type:'fighter',ex:.25,ey:.25},{type:'fighter',ex:.75,ey:.25}],
+     [{type:'brute',ex:.25,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.75,ey:.2},{type:'striker',ex:.4,ey:.25},{type:'striker',ex:.6,ey:.25}],
+     [{type:'gunner',ex:.2,ey:.2},{type:'gunner',ex:.4,ey:.18},{type:'gunner',ex:.6,ey:.18},{type:'gunner',ex:.8,ey:.2},{type:'brute',ex:.5,ey:.25}],
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}],
+     [{type:'brute',ex:.2,ey:.2},{type:'brute',ex:.5,ey:.18},{type:'brute',ex:.8,ey:.2},{type:'striker',ex:.3,ey:.25},{type:'striker',ex:.5,ey:.22},{type:'striker',ex:.7,ey:.25},{type:'gunner',ex:.4,ey:.25},{type:'gunner',ex:.6,ey:.25}]
+   ]},
+  {name:'終焉虛空',sub:'終極之戰 — 虛空支配者降臨',
+   waves:[
+     [{type:'miniboss',ex:.3,ey:.18},{type:'miniboss',ex:.7,ey:.18}],
+     [{type:'boss',ex:.5,ey:.18}]
+   ]}
+];
+
+// ─── 世界分組（仿瑪利歐世界地圖）───
+// bg: 背景漸層／格線色　ambient: 環境粒子類型　tint: 敵人顏色疊加　status: 被攻擊時附加的特殊狀態
+const CM_WORLDS=[
+  {name:'第一世界',sub:'前線基地',icon:'🏔',color:'#ff6666',stages:[0,1,2,3,4],
+   bg:{top:'#0a0d16',bottom:'#1a1422',grid:'rgba(255,120,120,.025)'},ambient:'spark',tint:null,status:null,
+   statusDesc:'無特殊狀態 — 標準戰場'},
+  {name:'第二世界',sub:'霓虹叢林',icon:'🌲',color:'#44dd99',stages:[5,6,7,8,9],
+   bg:{top:'#04140f',bottom:'#0a2a1c',grid:'rgba(80,255,170,.03)'},ambient:'leaf',tint:'#225544',status:'poison',
+   statusDesc:'🍃 中毒：受到敵人攻擊後，3秒內持續扣血'},
+  {name:'第三世界',sub:'荒蕪沙地',icon:'🏜',color:'#ffaa44',stages:[10,11,12,13,14],
+   bg:{top:'#1a1106',bottom:'#2e1c08',grid:'rgba(255,180,80,.03)'},ambient:'sand',tint:'#664422',status:'sandstorm',
+   statusDesc:'🏜 沙塵暴：場景偶爾揚起沙塵，短暫降低視野'},
+  {name:'第四世界',sub:'極寒雪域',icon:'❄',color:'#66ccff',stages:[15,16,17,18,19],
+   bg:{top:'#060e1a',bottom:'#0e1f33',grid:'rgba(120,200,255,.03)'},ambient:'snow',tint:'#335566',status:'slow',
+   statusDesc:'❄ 凍傷：受到敵人攻擊後，2秒內移動速度降低'},
+  {name:'第五世界',sub:'熔岩核心',icon:'🌋',color:'#ff4444',stages:[20,21,22,23,24],
+   bg:{top:'#1a0604',bottom:'#330a06',grid:'rgba(255,90,60,.035)'},ambient:'ember',tint:'#552211',status:'burn',
+   statusDesc:'🔥 灼燒：受到敵人攻擊後，3秒內持續燒傷扣血'},
+  {name:'第六世界',sub:'機械要塞',icon:'🤖',color:'#8899ff',stages:[25,26,27,28,29],
+   bg:{top:'#080a1a',bottom:'#12183a',grid:'rgba(140,160,255,.03)'},ambient:'spark',tint:'#33335a',status:'slow',
+   statusDesc:'⚡ 電擊：受到敵人攻擊後，2秒內移動速度降低'},
+  {name:'第七世界',sub:'深海遺跡',icon:'🌊',color:'#33aaff',stages:[30,31,32,33,34],
+   bg:{top:'#040e1a',bottom:'#082238',grid:'rgba(60,180,255,.03)'},ambient:'leaf',tint:'#1f4a66',status:'poison',
+   statusDesc:'☣ 毒水：受到敵人攻擊後，3秒內持續扣血'},
+  {name:'第八世界',sub:'星界深淵',icon:'🌌',color:'#cc66ff',stages:[35,36,37,38,39],
+   bg:{top:'#0a0414',bottom:'#1c0a30',grid:'rgba(200,120,255,.035)'},ambient:'ember',tint:'#442266',status:'burn',
+   statusDesc:'☄ 星火灼燒：受到敵人攻擊後，3秒內持續燒傷扣血'}
+];
+function cmWorldOf(stageIdx){
+  const wi=CM_WORLDS.findIndex(w=>w.stages.includes(stageIdx));
+  return wi<0?0:wi;
+}
+
+// ─── 戰鬥模式關卡進度與武器升級存檔 ───
+let cmStageUnlocked=COMBAT_STAGES.map((_,i)=>i===0);
+let cmXP=0;
+let cmGunLevels=CM_GUNS.map(()=>1); // 永久武器等級 1~5，於選單用經驗值升級
+let cmHpLevel=1; // 最大血量等級 1~5，於選單用經驗值升級
+let cmSpdLevel=1; // 移動速度等級 1~5，於選單用經驗值升級
+let cmStageClears=COMBAT_STAGES.map(()=>0); // 各關卡通關次數，重複打經驗值遞減
+const CM_GUN_MAX_LV=8;
+const CM_UPGRADE_COSTS=[60,120,220,400,650,950,1300]; // Lv1→2...7→8 所需經驗值
+const CM_HP_PER_LV=20; // 每級增加的最大血量
+function cmMaxHP(){return 100+(cmHpLevel-1)*CM_HP_PER_LV;}
+const CM_SPD_PER_LV=0.04; // 每級增加的移速倍率（Lv5 = +16%）
+function cmSpdMult(){return 1+(cmSpdLevel-1)*CM_SPD_PER_LV;}
+(function loadCombatProgress(){
+  try{
+    const s=JSON.parse(localStorage.getItem('bhCombatProgress'));
+    if(s&&Array.isArray(s.unlocked)){
+      for(let i=0;i<COMBAT_STAGES.length;i++)if(s.unlocked[i])cmStageUnlocked[i]=true;
     }
+    if(s&&typeof s.xp==='number')cmXP=s.xp;
+    if(s&&Array.isArray(s.gunLevels)){
+      for(let i=0;i<CM_GUNS.length;i++)if(s.gunLevels[i]>=1&&s.gunLevels[i]<=CM_GUN_MAX_LV)cmGunLevels[i]=s.gunLevels[i];
+    }
+    if(s&&typeof s.hpLevel==='number'&&s.hpLevel>=1&&s.hpLevel<=CM_GUN_MAX_LV)cmHpLevel=s.hpLevel;
+    if(s&&typeof s.spdLevel==='number'&&s.spdLevel>=1&&s.spdLevel<=CM_GUN_MAX_LV)cmSpdLevel=s.spdLevel;
+    if(s&&Array.isArray(s.stageClears)){
+      for(let i=0;i<COMBAT_STAGES.length;i++)if(typeof s.stageClears[i]==='number')cmStageClears[i]=s.stageClears[i];
+    }
+  }catch(e){}
+  cmStageUnlocked[0]=true;
+})();
+function saveCombatProgress(){
+  try{localStorage.setItem('bhCombatProgress',JSON.stringify({unlocked:cmStageUnlocked,xp:cmXP,gunLevels:cmGunLevels,hpLevel:cmHpLevel,spdLevel:cmSpdLevel,stageClears:cmStageClears}));}catch(e){}
+}
+// 通關獎勵經驗值：基礎值依關卡難度遞增，重複通關遞減（仿貓咪大戰爭）
+function cmAwardStageXP(stageIdx){
+  const clears=cmStageClears[stageIdx]||0;
+  const base=20+stageIdx*4;
+  const xp=Math.max(5,Math.round(base/(1+clears*0.6)));
+  cmStageClears[stageIdx]=clears+1;
+  cmXP+=xp;saveCombatProgress();
+  return xp;
+}
+// 武器升級加成：每級 +18% 傷害／爆炸傷害，冷卻略縮短（上限-30%）
+// 武器升級平衡：每級傷害+15%（Lv5 = +60%），冷卻每級-5%、最多-20%（Lv5）
+function cmLvDmgMult(lv){return 1+(lv-1)*0.15;}
+function cmLvCdMult(lv){return Math.max(0.8,1-(lv-1)*0.05);}
+// 世界進度限制升級等級：打到第幾世界，最高可升到對應等級
+const CM_WORLD_MAXLV=[2,3,4,5,6,7,8,8];
+function cmHighestWorldCleared(){
+  let hi=-1;
+  for(let i=0;i<COMBAT_STAGES.length;i++){
+    if(cmStageClears[i]>0){const wi=cmWorldOf(i);if(wi>hi)hi=wi;}
+  }
+  return hi;
+}
+function cmMaxUpgradeLv(){
+  const hi=cmHighestWorldCleared();
+  if(hi<0)return 1;
+  return CM_WORLD_MAXLV[Math.min(hi,CM_WORLD_MAXLV.length-1)];
+}
+function getGunStats(slot){
+  const gunId=cmSelGuns[slot];
+  const base=CM_GUNS[gunId];
+  const lv=cmGunLevels[gunId];
+  if(lv<=1)return base;
+  const mult=cmLvDmgMult(lv);
+  const out=Object.assign({},base,{dmg:Math.round(base.dmg*mult*10)/10,cd:base.cd*cmLvCdMult(lv)});
+  if(base.explode)out.blastDmg=Math.round(base.blastDmg*mult);
+  return out;
+}
+
+// ─── Battle menu ───
+function showBattleMenu(){
+  let d=document.getElementById('battle-menu');
+  if(!d){
+    d=document.createElement('div');
+    d.id='battle-menu';d.className='ov';
+    d.innerHTML=`<div class="obg"></div>
+    <div class="oi">
+      <div class="logo" style="margin-top:8px;color:#ff6666">⚔ 戰鬥模式</div>
+      <div class="logo-s">COMBAT MODE · 試煉場</div>
+      <div id="cm-world-view">
+        <div class="sh">選擇世界 SELECT WORLD</div>
+        <div id="cm-world-grid" style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:14px;width:100%;max-width:760px;margin-bottom:18px;padding:10px 0"></div>
+        <div class="go-bn" style="max-width:260px;margin-top:6px">
+          <button class="gb pri" onclick="document.getElementById('cm-world-view').style.display='none';document.getElementById('cm-weapon-view').style.display='flex';rebuildWeaponMenu()">🔧 武器強化 WEAPON UPGRADE</button>
+          <button class="gb" onclick="document.getElementById('battle-menu').style.display='none';mnUI.style.display='flex'">← 返回主選單</button>
+        </div>
+      </div>
+      <div id="cm-weapon-view" style="display:none;width:100%;flex-direction:column;align-items:center">
+        <div class="sh" id="cm-weapon-xp">🔧 武器強化　經驗值 XP：0</div>
+        <div style="display:flex;gap:14px;width:100%;max-width:760px;flex-wrap:wrap;justify-content:center;align-items:flex-start">
+          <div id="cm-weapon-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;flex:1 1 260px;max-width:300px;max-height:440px;overflow-y:auto;padding:4px"></div>
+          <div id="cm-weapon-detail" style="flex:1 1 360px;max-width:420px;border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:18px;background:var(--panel)"></div>
+        </div>
+        <div class="go-bn" style="max-width:220px;margin-top:14px">
+          <button class="gb" onclick="document.getElementById('cm-weapon-view').style.display='none';document.getElementById('cm-world-view').style.display='block'">← 返回</button>
+        </div>
+      </div>
+      <div id="cm-loadout-view" style="display:none;width:100%;flex-direction:column;align-items:center">
+        <div class="sh" id="cm-loadout-title">選擇關卡 SELECT STAGE</div>
+        <div id="cm-stage-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;width:100%;max-width:740px;margin-bottom:18px"></div>
+        <div class="go-bn" style="max-width:220px;margin-top:14px">
+          <button class="gb pri" onclick="document.getElementById('cm-loadout-view').style.display='none';document.getElementById('cm-equip-view').style.display='flex';rebuildCombatMenuGrids()">▶ 下一步：選擇裝備</button>
+          <button class="gb" onclick="document.getElementById('cm-loadout-view').style.display='none';document.getElementById('cm-world-view').style.display='block';rebuildCombatWorldMap()">← 選擇世界</button>
+        </div>
+      </div>
+      <div id="cm-equip-view" style="display:none;width:100%;flex-direction:column;align-items:center">
+        <div class="sh" id="cm-xp-display">經驗值 XP：0</div>
+        <div class="sh">選擇近戰武器（每場僅可攜帶 1 種）</div>
+        <div id="cm-melee-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;width:100%;max-width:740px;margin-bottom:18px"></div>
+        <div class="sh">選擇槍械（出戰前選 4 種，填滿 1-4 號欄位）・傷害/冷卻已套用武器強化等級，可在主選單「🔧 武器強化」用經驗值永久升級（最高 Lv5）</div>
+        <div id="cm-gun-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;width:100%;max-width:740px;margin-bottom:18px"></div>
+        <div class="sh">選擇出戰道具（按 Q 主動使用，有冷卻）</div>
+        <div id="cm-item-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;width:100%;max-width:740px;margin-bottom:18px"></div>
+        <div class="sh">選擇位移技能（按 F 使用）</div>
+        <div id="cm-fskill-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;width:100%;max-width:740px;margin-bottom:18px"></div>
+        <div class="sh">說明</div>
+        <div class="hp" style="max-width:740px;width:100%">
+          <div class="hg">
+            <div class="hi"><div class="hii">🔫</div><div class="hit"><b>左鍵（按住）</b>：連發射擊，瞄準游標方向</div></div>
+            <div class="hi"><div class="hii">⚔</div><div class="hit"><b>右鍵</b>：使用已攜帶的近戰武器（盾牌為按住格擋）</div></div>
+            <div class="hi"><div class="hii">🛡</div><div class="hit">舉盾期間：擋下彈幕的瞬間<b>點擊左鍵（0.12秒內）</b>才能將🔵藍色彈幕彈飛回去，時機沒抓準則直接擋下消除；彈反成功後有<b>1.5秒冷卻</b>，冷卻中盾牌只能格擋不能彈反</div></div>
+            <div class="hi"><div class="hii">💨</div><div class="hit"><b>F</b>：使用已選擇的位移技能（WASD方向，5種可選）</div></div>
+            <div class="hi"><div class="hii">🔢</div><div class="hit"><b>1-4</b>：切換已攜帶的4種槍械</div></div>
+            <div class="hi"><div class="hii">Q</div><div class="hit"><b>Q</b>：使用出戰道具（有冷卻時間，可在戰鬥中重複使用）</div></div>
+            <div class="hi"><div class="hii">🔵</div><div class="hit"><span style="color:#3399ff">藍色彈幕</span>：可用盾牌擋下；擋下瞬間點擊左鍵（0.12秒內）可彈反回去傷害敵人</div></div>
+            <div class="hi"><div class="hii">🔴</div><div class="hit"><span style="color:#ff3333">紅色彈幕</span>：無法擋下也無法彈反，必須閃避（部分世界特色彈幕固定為紅色，例如熔岩世界的火焰彈）</div></div>
+            <div class="hi"><div class="hii">🟡</div><div class="hit"><span style="color:#ffcc00">黃色彈幕</span>：BOSS專用，初期可被盾牌擋下，但2秒後會轉變為🔴紅色，務必提早處理或閃避</div></div>
+            <div class="hi"><div class="hii">⚪</div><div class="hit"><span style="color:#ffffff">白色彈幕</span>：盾牌彈反後產生，會自動追向最近的敵人並造成傷害</div></div>
+          </div>
+        </div>
+        <div class="sh">場上掉落道具（戰鬥中地面隨機出現，碰到即拾取）</div>
+        <div class="hp" style="max-width:740px;width:100%">
+          <div class="hg">
+            <div class="hi"><div class="hii">🩹</div><div class="hit"><b>醫療包</b>：恢復 20 HP</div></div>
+            <div class="hi"><div class="hii">💨</div><div class="hit"><b>加速</b>：5秒內移動速度 +50%</div></div>
+            <div class="hi"><div class="hii">🗿</div><div class="hit"><b>不死圖騰</b>：死亡時自動復活並回復50 HP（可疊加持有，右下角顯示數量）</div></div>
+            <div class="hi"><div class="hii">🔥</div><div class="hit"><b>力量藥劇</b>：8秒內傷害 ×1.5</div></div>
+            <div class="hi"><div class="hii">🛡</div><div class="hit"><b>護盾石</b>：6秒內受到傷害 -50%</div></div>
+            <div class="hi"><div class="hii">❄</div><div class="hit"><b>冰封結晶</b>：所有敵人凍結 2 秒</div></div>
+            <div class="hi"><div class="hii">⚡</div><div class="hit"><b>過載電池</b>：8秒內所有冷卻時間 -30%</div></div>
+            <div class="hi"><div class="hii">💎</div><div class="hit"><b>經驗結晶</b>：立即獲得 15 XP</div></div>
+            <div class="hi"><div class="hii">✨</div><div class="hit"><b>淨化之光</b>：清除中毒、灼燒、凍傷等異常狀態</div></div>
+            <div class="hi"><div class="hii">💣</div><div class="hit"><b>破壞核心</b>：對周圍敵人造成 50 傷害並擊退</div></div>
+          </div>
+        </div>
+        <div class="go-bn" style="max-width:220px;margin-top:14px">
+          <button class="gb pri" onclick="if(cmSelGuns.length<4){showNotif('🔫 請選擇剛好4種槍械！','#ff6666');return;}document.getElementById('battle-menu').style.display='none';startCombat(cmSelStage)">▶ 開始挑戰</button>
+          <button class="gb" onclick="document.getElementById('cm-equip-view').style.display='none';document.getElementById('cm-loadout-view').style.display='flex';rebuildCombatMenuGrids()">← 選擇關卡</button>
+        </div>
+      </div>
+    </div>`;
+    document.getElementById('wrap').appendChild(d);
+  }
+  d.style.display='flex';
+  document.getElementById('cm-world-view').style.display='block';
+  document.getElementById('cm-loadout-view').style.display='none';
+  document.getElementById('cm-equip-view').style.display='none';
+  document.getElementById('cm-weapon-view').style.display='none';
+  rebuildCombatWorldMap();
+  mnUI.style.display='none';
+}
+
+function rebuildCombatWorldMap(){
+  const wg=document.getElementById('cm-world-grid');
+  if(!wg)return;
+  wg.innerHTML='';
+  CM_WORLDS.forEach((world,wi)=>{
+    const firstStage=world.stages[0];
+    const locked=!cmStageUnlocked[firstStage];
+    const cleared=wi<CM_WORLDS.length-1&&cmStageUnlocked[CM_WORLDS[wi+1].stages[0]];
+    const node=document.createElement('button');
+    node.style.cssText=`width:140px;padding:14px 10px;border-radius:16px;border:2px solid ${locked?'rgba(255,255,255,.15)':world.color};
+    background:${locked?'var(--panel)':world.color+'22'};color:#fff;cursor:${locked?'not-allowed':'pointer'};text-align:center;transition:transform .15s,border-color .18s;-webkit-appearance:none;appearance:none;opacity:${locked?0.4:1}`;
+    node.innerHTML=`<span style="display:block;font-size:2rem;margin-bottom:4px">${locked?'🔒':world.icon}</span>
+    <span style="display:block;font-family:Orbitron,monospace;font-size:.8rem;font-weight:700;color:${locked?'#fff':world.color}">${world.name}</span>
+    <span style="display:block;font-size:.6rem;color:rgba(255,255,255,.5);margin-top:2px">${locked?'尚未解鎖':world.sub}</span>
+    <span style="display:block;font-size:.52rem;color:rgba(255,255,255,.3);margin-top:4px">⚔ ${world.stages.length} 關${cleared?'　✅':''}</span>`;
+    if(!locked){
+      node.addEventListener('mouseenter',()=>node.style.transform='scale(1.06)');
+      node.addEventListener('mouseleave',()=>node.style.transform='scale(1)');
+    }
+    node.addEventListener('click',()=>{
+      if(locked){showNotif('🔒 請先通關前一個世界！','#ff6666');return;}
+      cmSelWorld=wi;
+      if(!world.stages.includes(cmSelStage)){
+        cmSelStage=world.stages.find(s=>cmStageUnlocked[s])??firstStage;
+      }
+      document.getElementById('cm-world-view').style.display='none';
+      const lv=document.getElementById('cm-loadout-view');
+      lv.style.display='flex';
+      rebuildCombatMenuGrids();
+    });
+    wg.appendChild(node);
+    if(wi<CM_WORLDS.length-1){
+      const arrow=document.createElement('span');
+      arrow.textContent='→';
+      arrow.style.cssText=`font-size:1.4rem;color:rgba(255,255,255,${locked?0.15:0.35})`;
+      wg.appendChild(arrow);
+    }
+  });
+}
+
+function rebuildCombatMenuGrids(){
+  const wt=document.getElementById('cm-loadout-title');
+  if(wt){
+    const w=CM_WORLDS[cmSelWorld];
+    wt.textContent=`${w.icon} ${w.name}・${w.sub} — 選擇關卡`;
+  }
+  const xd=document.getElementById('cm-xp-display');
+  if(xd)xd.textContent=`經驗值 XP：${cmXP}`;
+  const sg=document.getElementById('cm-stage-grid');
+  if(sg){
+    sg.innerHTML='';
+    CM_WORLDS[cmSelWorld].stages.forEach(i=>{
+      const st=COMBAT_STAGES[i];
+      const sel=cmSelStage===i;
+      const locked=!cmStageUnlocked[i];
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:12px 10px;border-radius:12px;border:1px solid ${sel?'rgba(255,102,102,.6)':'rgba(255,255,255,.18)'};
+      background:${sel?'rgba(255,102,102,.1)':'var(--panel)'};color:#fff;cursor:${locked?'not-allowed':'pointer'};text-align:left;transition:border-color .18s,transform .13s;-webkit-appearance:none;appearance:none;opacity:${locked?0.45:1}`;
+      btn.innerHTML=`<span style="display:block;font-family:Orbitron,monospace;font-size:.78rem;font-weight:700;color:${sel?'#ff6666':'#fff'};margin-bottom:3px">${locked?'🔒 ':sel?'✓ ':''}${st.name}</span>
+      <span style="display:block;font-size:.6rem;color:rgba(255,255,255,.42)">${locked?'通關前一關卡以解鎖':st.sub}</span>
+      <span style="font-size:.55rem;color:rgba(255,255,255,.3)">⚔ ${st.waves.length} 波</span>`;
+      btn.addEventListener('click',()=>{
+        if(locked){showNotif('🔒 請先通關前一關卡！','#ff6666');return;}
+        cmSelStage=i;rebuildCombatMenuGrids();
+      });
+      sg.appendChild(btn);
+    });
+  }
+  const mg=document.getElementById('cm-melee-grid');
+  if(mg){
+    mg.innerHTML='';
+    CM_MELEES.forEach((m,i)=>{
+      const sel=cmSelMelee===i;
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:10px;border-radius:12px;border:1px solid ${sel?'rgba(255,255,255,.55)':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,255,255,.1)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .18s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.4rem">${m.icon}</span>
+      <span style="display:block;font-size:.68rem;font-weight:700;margin-top:2px">${sel?'✓ ':''}${m.name}</span>
+      ${m.mode==='strike'?`<span style="display:block;font-size:.5rem;color:rgba(255,255,255,.35);margin-top:2px">傷${m.dmg}・CD${m.cd}s</span>`:''}
+      <span style="display:block;font-size:.52rem;color:rgba(255,255,255,.45);margin-top:3px;line-height:1.4">${m.desc||''}</span>`;
+      btn.addEventListener('click',()=>{cmSelMelee=i;rebuildCombatMenuGrids();});
+      mg.appendChild(btn);
+    });
+  }
+  const gg=document.getElementById('cm-gun-grid');
+  if(gg){
+    gg.innerHTML='';
+    CM_GUNS.forEach((g,i)=>{
+      const sel=cmSelGuns.includes(i);
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:10px;border-radius:12px;border:1px solid ${sel?'rgba(136,221,255,.6)':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(136,221,255,.1)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .18s;-webkit-appearance:none;appearance:none`;
+      const lv=cmGunLevels[i];
+      const curDmg=Math.round(g.dmg*cmLvDmgMult(lv)*10)/10;
+      const curCd=Math.round(g.cd*cmLvCdMult(lv)*1000)/1000;
+      btn.innerHTML=`<span style="display:block;font-size:1.4rem">${g.icon}</span>
+      <span style="display:block;font-size:.68rem;font-weight:700;margin-top:2px;color:${sel?'#88ddff':'#fff'}">${sel?'✓ ':''}${g.name}${lv>1?` <span style="color:#ffdd44">Lv${lv}</span>`:''}</span>
+      <span style="display:block;font-size:.5rem;color:rgba(255,255,255,.35);margin-top:2px">傷${curDmg}・CD${curCd}s</span>`;
+      btn.addEventListener('click',()=>{
+        if(sel){
+          if(cmSelGuns.length>1)cmSelGuns=cmSelGuns.filter(x=>x!==i);
+        }else{
+          if(cmSelGuns.length>=4)showNotif('🔫 最多選擇4種槍械！','#ff6666');
+          else cmSelGuns.push(i);
+        }
+        rebuildCombatMenuGrids();
+      });
+      gg.appendChild(btn);
+    });
+  }
+  const ig=document.getElementById('cm-item-grid');
+  if(ig){
+    ig.innerHTML='';
+    CM_ITEMS.forEach((it,i)=>{
+      const sel=cmSelItem===i;
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:10px;border-radius:12px;border:1px solid ${sel?'rgba(255,255,255,.55)':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,255,255,.1)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .18s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.4rem">${it.icon}</span>
+      <span style="display:block;font-size:.68rem;font-weight:700;margin-top:2px">${sel?'✓ ':''}${it.name}</span>
+      <span style="display:block;font-size:.55rem;color:rgba(255,255,255,.4);margin-top:2px">${it.desc}</span>`;
+      btn.addEventListener('click',()=>{cmSelItem=i;rebuildCombatMenuGrids();});
+      ig.appendChild(btn);
+    });
+  }
+  const fg=document.getElementById('cm-fskill-grid');
+  if(fg){
+    fg.innerHTML='';
+    CM_FSKILLS.forEach((sk,i)=>{
+      const sel=cmSelFSkill===i;
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:10px;border-radius:12px;border:1px solid ${sel?'rgba(255,255,255,.55)':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,255,255,.1)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .18s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.4rem">${sk.icon}</span>
+      <span style="display:block;font-size:.68rem;font-weight:700;margin-top:2px">${sel?'✓ ':''}${sk.name}</span>
+      <span style="display:block;font-size:.5rem;color:rgba(255,255,255,.35);margin-top:2px">CD ${sk.cd}s</span>
+      <span style="display:block;font-size:.52rem;color:rgba(255,255,255,.45);margin-top:3px;line-height:1.4">${sk.desc}</span>`;
+      btn.addEventListener('click',()=>{cmSelFSkill=i;rebuildCombatMenuGrids();});
+      fg.appendChild(btn);
+    });
+  }
+}
+
+// ─── 武器強化選單（仿貓咪大戰爭角色選單：左側清單＋右側詳細卡） ───
+function rebuildWeaponMenu(){
+  const xd=document.getElementById('cm-weapon-xp');
+  if(xd)xd.textContent=`🔧 武器強化　經驗值 XP：${cmXP}`;
+  const list=document.getElementById('cm-weapon-list');
+  if(list){
+    list.innerHTML='';
+    // 最大血量升級（獨立於槍械）
+    {
+      const sel=cmSelWeaponMenuGun==='hp';
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:8px 4px;border-radius:10px;border:2px solid ${sel?'#ffdd44':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,221,68,.12)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .15s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.6rem">❤</span>
+      <span style="display:block;font-size:.6rem;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">最大血量</span>
+      <span style="display:block;font-size:.55rem;color:#ffdd44;margin-top:1px">Lv.${cmHpLevel}</span>`;
+      btn.addEventListener('click',()=>{cmSelWeaponMenuGun='hp';rebuildWeaponMenu();});
+      list.appendChild(btn);
+    }
+    // 移動速度升級（獨立於槍械）
+    {
+      const sel=cmSelWeaponMenuGun==='spd';
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:8px 4px;border-radius:10px;border:2px solid ${sel?'#ffdd44':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,221,68,.12)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .15s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.6rem">💨</span>
+      <span style="display:block;font-size:.6rem;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">移動速度</span>
+      <span style="display:block;font-size:.55rem;color:#ffdd44;margin-top:1px">Lv.${cmSpdLevel}</span>`;
+      btn.addEventListener('click',()=>{cmSelWeaponMenuGun='spd';rebuildWeaponMenu();});
+      list.appendChild(btn);
+    }
+    CM_GUNS.forEach((g,i)=>{
+      const lv=cmGunLevels[i];
+      const sel=cmSelWeaponMenuGun===i;
+      const btn=document.createElement('button');
+      btn.style.cssText=`padding:8px 4px;border-radius:10px;border:2px solid ${sel?'#ffdd44':'rgba(255,255,255,.15)'};
+      background:${sel?'rgba(255,221,68,.12)':'var(--panel)'};color:#fff;cursor:pointer;text-align:center;transition:border-color .15s;-webkit-appearance:none;appearance:none`;
+      btn.innerHTML=`<span style="display:block;font-size:1.6rem">${g.icon}</span>
+      <span style="display:block;font-size:.6rem;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g.name}</span>
+      <span style="display:block;font-size:.55rem;color:#ffdd44;margin-top:1px">Lv.${lv}</span>`;
+      btn.addEventListener('click',()=>{cmSelWeaponMenuGun=i;rebuildWeaponMenu();});
+      list.appendChild(btn);
+    });
+  }
+  const detail=document.getElementById('cm-weapon-detail');
+  if(detail&&cmSelWeaponMenuGun==='hp'){
+    const lv=cmHpLevel;
+    const cap=Math.min(CM_GUN_MAX_LV,cmMaxUpgradeLv());
+    const trueMaxed=lv>=CM_GUN_MAX_LV;
+    const capped=!trueMaxed&&lv>=cap;
+    const maxed=trueMaxed||capped;
+    const cost=maxed?0:CM_UPGRADE_COSTS[lv-1];
+    const afford=!maxed&&cmXP>=cost;
+    let dots='';
+    for(let k=1;k<=CM_GUN_MAX_LV;k++){
+      dots+=`<span style="display:inline-block;width:14px;height:14px;border-radius:50%;margin:0 3px;background:${k<=lv?'#ffdd44':'rgba(255,255,255,.15)'};border:1px solid ${k<=lv?'#ffdd44':'rgba(255,255,255,.25)'}"></span>`;
+    }
+    const curHp=100+(lv-1)*CM_HP_PER_LV;
+    const nextHp=maxed?curHp:100+lv*CM_HP_PER_LV;
+    detail.innerHTML=`
+      <div style="text-align:center">
+        <span style="font-size:3rem">❤</span>
+        <div style="font-family:Orbitron,monospace;font-weight:700;font-size:1.05rem;margin-top:4px">最大血量</div>
+        <div style="margin-top:6px">${dots}</div>
+        <div style="font-size:.7rem;color:#ffdd44;margin-top:4px">Lv.${lv} ${trueMaxed?'（已滿級）':`/ ${CM_GUN_MAX_LV}`}</div>
+      </div>
+      <div style="margin-top:14px;font-size:.75rem;line-height:1.9;border-top:1px solid rgba(255,255,255,.1);padding-top:10px">
+        <div style="display:flex;justify-content:space-between"><span style="color:rgba(255,255,255,.5)">最大HP</span><span>${curHp}${!maxed?` <span style="color:#88ffaa">→ ${nextHp}</span>`:''}</span></div>
+      </div>
+      <div style="margin-top:14px;text-align:center">
+        ${trueMaxed
+          ?`<div style="font-size:.8rem;color:#ffdd44;font-weight:700">⭐ 已達最高等級 ⭐</div>`
+          :capped
+          ?`<div style="font-size:.75rem;color:#ff8888;font-weight:700">🔒 等級上限 Lv.${cap}（推進世界以解鎖更高等級）</div>`
+          :`<button class="gb pri" id="cm-weapon-upgrade-btn" style="width:100%" ${afford?'':'disabled'}>升級至 Lv.${lv+1}（需 ${cost} XP）</button>
+            ${!afford?`<div style="font-size:.6rem;color:#ff8888;margin-top:6px">經驗值不足（目前 ${cmXP} XP）</div>`:''}`}
+        ${lv>1?`<button class="gb" id="cm-weapon-downgrade-btn" style="width:100%;margin-top:8px">降級至 Lv.${lv-1}（退回 ${CM_UPGRADE_COSTS[lv-2]} XP）</button>`:''}
+      </div>`;
+    if(!maxed){
+      const ubtn=document.getElementById('cm-weapon-upgrade-btn');
+      if(ubtn)ubtn.addEventListener('click',()=>{
+        if(cmXP>=cost){
+          cmXP-=cost;cmHpLevel=lv+1;saveCombatProgress();
+          showNotif(`❤ 最大血量升級至 Lv${lv+1}！`,'#ffdd44');
+          rebuildWeaponMenu();
+        }
+      });
+    }
+    if(lv>1){
+      const dbtn=document.getElementById('cm-weapon-downgrade-btn');
+      if(dbtn)dbtn.addEventListener('click',()=>{
+        cmXP+=CM_UPGRADE_COSTS[lv-2];cmHpLevel=lv-1;saveCombatProgress();
+        showNotif(`❤ 最大血量降級至 Lv${lv-1}，退回經驗值`,'#88ccff');
+        rebuildWeaponMenu();
+      });
+    }
+    return;
+  }
+  if(detail&&cmSelWeaponMenuGun==='spd'){
+    const lv=cmSpdLevel;
+    const cap=Math.min(CM_GUN_MAX_LV,cmMaxUpgradeLv());
+    const trueMaxed=lv>=CM_GUN_MAX_LV;
+    const capped=!trueMaxed&&lv>=cap;
+    const maxed=trueMaxed||capped;
+    const cost=maxed?0:CM_UPGRADE_COSTS[lv-1];
+    const afford=!maxed&&cmXP>=cost;
+    let dots='';
+    for(let k=1;k<=CM_GUN_MAX_LV;k++){
+      dots+=`<span style="display:inline-block;width:14px;height:14px;border-radius:50%;margin:0 3px;background:${k<=lv?'#ffdd44':'rgba(255,255,255,.15)'};border:1px solid ${k<=lv?'#ffdd44':'rgba(255,255,255,.25)'}"></span>`;
+    }
+    const curPct=Math.round((1+(lv-1)*CM_SPD_PER_LV)*100);
+    const nextPct=maxed?curPct:Math.round((1+lv*CM_SPD_PER_LV)*100);
+    detail.innerHTML=`
+      <div style="text-align:center">
+        <span style="font-size:3rem">💨</span>
+        <div style="font-family:Orbitron,monospace;font-weight:700;font-size:1.05rem;margin-top:4px">移動速度</div>
+        <div style="margin-top:6px">${dots}</div>
+        <div style="font-size:.7rem;color:#ffdd44;margin-top:4px">Lv.${lv} ${trueMaxed?'（已滿級）':`/ ${CM_GUN_MAX_LV}`}</div>
+      </div>
+      <div style="margin-top:14px;font-size:.75rem;line-height:1.9;border-top:1px solid rgba(255,255,255,.1);padding-top:10px">
+        <div style="display:flex;justify-content:space-between"><span style="color:rgba(255,255,255,.5)">移速</span><span>${curPct}%${!maxed?` <span style="color:#88ffaa">→ ${nextPct}%</span>`:''}</span></div>
+      </div>
+      <div style="margin-top:14px;text-align:center">
+        ${trueMaxed
+          ?`<div style="font-size:.8rem;color:#ffdd44;font-weight:700">⭐ 已達最高等級 ⭐</div>`
+          :capped
+          ?`<div style="font-size:.75rem;color:#ff8888;font-weight:700">🔒 等級上限 Lv.${cap}（推進世界以解鎖更高等級）</div>`
+          :`<button class="gb pri" id="cm-weapon-upgrade-btn" style="width:100%" ${afford?'':'disabled'}>升級至 Lv.${lv+1}（需 ${cost} XP）</button>
+            ${!afford?`<div style="font-size:.6rem;color:#ff8888;margin-top:6px">經驗值不足（目前 ${cmXP} XP）</div>`:''}`}
+        ${lv>1?`<button class="gb" id="cm-weapon-downgrade-btn" style="width:100%;margin-top:8px">降級至 Lv.${lv-1}（退回 ${CM_UPGRADE_COSTS[lv-2]} XP）</button>`:''}
+      </div>`;
+    if(!maxed){
+      const ubtn=document.getElementById('cm-weapon-upgrade-btn');
+      if(ubtn)ubtn.addEventListener('click',()=>{
+        if(cmXP>=cost){
+          cmXP-=cost;cmSpdLevel=lv+1;saveCombatProgress();
+          showNotif(`💨 移動速度升級至 Lv${lv+1}！`,'#ffdd44');
+          rebuildWeaponMenu();
+        }
+      });
+    }
+    if(lv>1){
+      const dbtn=document.getElementById('cm-weapon-downgrade-btn');
+      if(dbtn)dbtn.addEventListener('click',()=>{
+        cmXP+=CM_UPGRADE_COSTS[lv-2];cmSpdLevel=lv-1;saveCombatProgress();
+        showNotif(`💨 移動速度降級至 Lv${lv-1}，退回經驗值`,'#88ccff');
+        rebuildWeaponMenu();
+      });
+    }
+    return;
+  }
+  if(detail){
+    const i=cmSelWeaponMenuGun;
+    const g=CM_GUNS[i];
+    const lv=cmGunLevels[i];
+    const cap=Math.min(CM_GUN_MAX_LV,cmMaxUpgradeLv());
+    const trueMaxed=lv>=CM_GUN_MAX_LV;
+    const capped=!trueMaxed&&lv>=cap;
+    const maxed=trueMaxed||capped;
+    const cost=maxed?0:CM_UPGRADE_COSTS[lv-1];
+    const afford=!maxed&&cmXP>=cost;
+    // 等級點點（Battle Cats 風格）
+    let dots='';
+    for(let k=1;k<=CM_GUN_MAX_LV;k++){
+      dots+=`<span style="display:inline-block;width:14px;height:14px;border-radius:50%;margin:0 3px;background:${k<=lv?'#ffdd44':'rgba(255,255,255,.15)'};border:1px solid ${k<=lv?'#ffdd44':'rgba(255,255,255,.25)'}"></span>`;
+    }
+    const curMult=cmLvDmgMult(lv);
+    const nextMult=maxed?curMult:cmLvDmgMult(lv+1);
+    const curDmg=Math.round(g.dmg*curMult*10)/10;
+    const nextDmg=Math.round(g.dmg*nextMult*10)/10;
+    const curCd=Math.round(g.cd*cmLvCdMult(lv)*1000)/1000;
+    const nextCd=Math.round(g.cd*cmLvCdMult(maxed?lv:lv+1)*1000)/1000;
+    detail.innerHTML=`
+      <div style="text-align:center">
+        <span style="font-size:3rem">${g.icon}</span>
+        <div style="font-family:Orbitron,monospace;font-weight:700;font-size:1.05rem;margin-top:4px">${g.name}</div>
+        <div style="margin-top:6px">${dots}</div>
+        <div style="font-size:.7rem;color:#ffdd44;margin-top:4px">Lv.${lv} ${trueMaxed?'（已滿級）':`/ ${CM_GUN_MAX_LV}`}</div>
+      </div>
+      <div style="margin-top:14px;font-size:.75rem;line-height:1.9;border-top:1px solid rgba(255,255,255,.1);padding-top:10px">
+        <div style="display:flex;justify-content:space-between"><span style="color:rgba(255,255,255,.5)">傷害</span><span>${curDmg}${!maxed?` <span style="color:#88ffaa">→ ${nextDmg}</span>`:''}</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:rgba(255,255,255,.5)">冷卻</span><span>${curCd}s${!maxed?` <span style="color:#88ffaa">→ ${nextCd}s</span>`:''}</span></div>
+        ${g.explode?`<div style="display:flex;justify-content:space-between"><span style="color:rgba(255,255,255,.5)">爆炸傷害</span><span>${Math.round(g.blastDmg*curMult)}${!maxed?` <span style="color:#88ffaa">→ ${Math.round(g.blastDmg*nextMult)}</span>`:''}</span></div>`:''}
+      </div>
+      <div style="margin-top:14px;text-align:center">
+        ${trueMaxed
+          ?`<div style="font-size:.8rem;color:#ffdd44;font-weight:700">⭐ 已達最高等級 ⭐</div>`
+          :capped
+          ?`<div style="font-size:.75rem;color:#ff8888;font-weight:700">🔒 等級上限 Lv.${cap}（推進世界以解鎖更高等級）</div>`
+          :`<button class="gb pri" id="cm-weapon-upgrade-btn" style="width:100%" ${afford?'':'disabled'}>升級至 Lv.${lv+1}（需 ${cost} XP）</button>
+            ${!afford?`<div style="font-size:.6rem;color:#ff8888;margin-top:6px">經驗值不足（目前 ${cmXP} XP）</div>`:''}`}
+        ${lv>1?`<button class="gb" id="cm-weapon-downgrade-btn" style="width:100%;margin-top:8px">降級至 Lv.${lv-1}（退回 ${CM_UPGRADE_COSTS[lv-2]} XP）</button>`:''}
+      </div>`;
+    if(!maxed){
+      const ubtn=document.getElementById('cm-weapon-upgrade-btn');
+      if(ubtn)ubtn.addEventListener('click',()=>{
+        if(cmXP>=cost){
+          cmXP-=cost;cmGunLevels[i]=lv+1;saveCombatProgress();
+          showNotif(`${g.icon} ${g.name} 升級至 Lv${lv+1}！`,'#ffdd44');
+          rebuildWeaponMenu();
+        }
+      });
+    }
+    if(lv>1){
+      const dbtn=document.getElementById('cm-weapon-downgrade-btn');
+      if(dbtn)dbtn.addEventListener('click',()=>{
+        cmXP+=CM_UPGRADE_COSTS[lv-2];cmGunLevels[i]=lv-1;saveCombatProgress();
+        showNotif(`${g.icon} ${g.name} 降級至 Lv${lv-1}，退回經驗值`,'#88ccff');
+        rebuildWeaponMenu();
+      });
+    }
+  }
+}
+
+function startCombat(stageIdx){
+  cmStage=stageIdx||0;cmWave=0;
+  cmPlayerHP=cmPlayerMaxHP=cmMaxHP();
+  cmBullets=[];cmPBullets=[];cmEnemies=[];
+  pvx=pvy=0;
+  cmGunCD=cmDashCD=0;cmFiring=false;cmWaveTransition=false;cmGunType=0;
+  cmAmbient=[];cmPoisonT=0,cmSlowT=0,cmBurnT=0,cmSandT=0,cmSandTimer=4+Math.random()*4;
+  cmMeleeType=cmSelMelee;cmMeleeCD=0;cmMeleeFX=null;
+  cmTransitionTimer=0;cmTransitionAction=null;
+  cmDashing=false;cmDashIF=0;cmHitIF=0;
+  cmShielding=false;cmParryWin=0;cmParryCD=0;
+  cmGunFlash=0;cmGunHits=[];
+  cmPowerMult=1;cmSpeedBoost=1;cmArmorOn=false;cmCDMult=1;
+  cmItemCD=0;cmItemBuffT=0;cmBurst=null;
+  cmPickups=[];cmPickupTimer=6+Math.random()*4;
+  cmPkSpeedT=0;cmPkPowerT=0;cmPkArmorT=0;cmPkFreezeT=0;cmPkHasteT=0;
+  cmReviveCharge=0;cmBigMsg=null;
+  cmPaused=false;
+  clearTimeout(cmPowerTO);clearTimeout(cmArmorTO);clearTimeout(cmSpeedTO);
+  player.x=W()*.3;player.y=H()*.75;
+  player.trail=[];
+  gstate='combat';
+  mnUI.style.display='none';goUI.style.display='none';puUI.style.display='none';
+  dbBm.style.display='none';dbPs.style.display='none';mbBb.style.display='none';
+  wrap.classList.add('cm-active');
+  const world=CM_WORLDS[cmWorldOf(cmStage)];
+  showNotif(`${world.icon} ${world.name}・${world.sub} — ${world.statusDesc}`,world.color);
+  spawnCombatStage(cmStage);
+  if(cmRaf)cancelAnimationFrame(cmRaf);
+  cmLastTS=0;
+  cmRaf=requestAnimationFrame(loopCombat);
+}
+
+function cleanupCombat(){
+  gstate='menu';
+  if(cmRaf){cancelAnimationFrame(cmRaf);cmRaf=null;}
+  cleanupGameDOM();
+  mbBb.style.display='flex';
+  wrap.classList.remove('cm-active');
+  cmBullets=[];cmPBullets=[];cmEnemies=[];
+}
+
+function spawnCombatStage(idx){
+  cmWave=0;cmBullets=[];cmPBullets=[];
+  cmSpawnWave(idx,0);
+  const st=COMBAT_STAGES[idx];
+  showNotif(`⚔ Stage ${idx+1}：${st.name}`,'#ff6666');
+}
+function cmSpawnWave(stageIdx,waveIdx){
+  const wave=COMBAT_STAGES[stageIdx].waves[waveIdx];
+  cmEnemies=[];
+  // 難度曲線：整體上調 — 初始關卡約1.3倍HP，最終關約3倍HP、移速更快、攻擊更頻繁
+  const diff=1.3+(stageIdx/(COMBAT_STAGES.length-1))*1.7;
+  wave.forEach(cfg=>{
+    const t=CM_ETYPES[cfg.type];
+    const hp=Math.round(t.hp*diff);
+    cmEnemies.push({
+      x:cfg.ex*W(),y:cfg.ey*H(),vx:0,vy:0,
+      r:t.r,hp:hp,maxHp:hp,
+      type:cfg.type,color:t.color,rim:t.rim,
+      spd:t.spd*(1+(diff-1)*0.12),ai:t.ai,keepDist:t.keepDist||0,
+      atkInt:t.atkInt/diff,atkTimer:t.atkInt*0.4+Math.random()*t.atkInt*0.4,
+      iframes:0,phase:0,dead:false,
+      pendingBullets:[],atkCount:0,
+      wanderT:Math.random()*10,wanderPhase:Math.random()*Math.PI*2,wanderFreq:0.5+Math.random()*0.9
+    });
+  });
+  const st=COMBAT_STAGES[stageIdx];
+  const isFinalBoss=wave.some(cfg=>cfg.type==='boss');
+  const isBossWave=wave.some(cfg=>cfg.type==='miniboss');
+  if(isFinalBoss)showNotif('💀 大BOSS降臨！','#ff3355');
+  else if(isBossWave)showNotif('👑 小BOSS出現！','#ffaa00');
+  else if(st.waves.length>1)showNotif(`🌊 Wave ${waveIdx+1} / ${st.waves.length}`,'#ffdd66');
+}
+
+// ─── Main loop ───
+function loopCombat(ts){
+  if(gstate!=='combat'){cmRaf=null;return;}
+  if(!cmLastTS)cmLastTS=ts;
+  const dt=Math.min((ts-cmLastTS)/16.667,3);
+  cmLastTS=ts;
+  if(!cmPaused){
+    try{updateCombat(dt);}
+    catch(err){
+      console.error('updateCombat error:',err);
+      // 發生例外時強制結束過場，避免卡在某一波無法繼續
+      cmWaveTransition=false;cmTransitionAction=null;
+    }
+  }
+  renderCombat(dt);
+  cmRaf=requestAnimationFrame(loopCombat);
+}
+
+function updateCombat(dt){
+  updatePlayerCombat(dt);
+  updateEnemiesCombat(dt);
+  updateCmBullets(dt);
+  updateCmPBullets(dt);
+  checkCombatHits();
+  checkCombatClear();
+  const ds=dt/60;
+  if(cmGunCD>0)cmGunCD=Math.max(0,cmGunCD-ds);
+  if(cmDashCD>0)cmDashCD=Math.max(0,cmDashCD-ds);
+  if(cmHitIF>0)cmHitIF=Math.max(0,cmHitIF-ds);
+  if(cmDashIF>0)cmDashIF=Math.max(0,cmDashIF-ds);
+  if(cmGunFlash>0)cmGunFlash=Math.max(0,cmGunFlash-ds);
+  if(cmShakeF>0)cmShakeF=Math.max(0,cmShakeF-dt);
+  if(cmMeleeCD>0)cmMeleeCD=Math.max(0,cmMeleeCD-ds);
+  if(cmItemCD>0)cmItemCD=Math.max(0,cmItemCD-ds);
+  if(cmItemBuffT>0){
+    cmItemBuffT=Math.max(0,cmItemBuffT-ds);
+    if(cmItemBuffT<=0){cmPowerMult=1;cmSpeedBoost=1;cmArmorOn=false;cmCDMult=1;}
+  }
+  if(cmMeleeFX){cmMeleeFX.life-=ds*4;if(cmMeleeFX.life<=0)cmMeleeFX=null;}
+  if(cmWaveTransition){
+    cmTransitionTimer-=ds;
+    if(cmTransitionTimer<=0){
+      const action=cmTransitionAction;cmTransitionAction=null;cmWaveTransition=false;
+      if(action)action();
+    }
+  }
+  if(cmDashing){cmDashT=Math.max(0,cmDashT-ds);if(cmDashT<=0)cmDashing=false;}
+  if(cmBurst){
+    cmBurst.timer-=ds;
+    if(cmBurst.timer<=0){
+      fireGunShot(cmBurst.gun);
+      cmBurst.remaining--;
+      if(cmBurst.remaining<=0)cmBurst=null;
+      else cmBurst.timer=cmBurst.gun.burstDelay;
+    }
+  }
+  if(cmFiring&&cmGunCD<=0&&!cmShielding)doCombatGun();
+  if(cmBigMsg){cmBigMsg.life-=ds;if(cmBigMsg.life<=0)cmBigMsg=null;}
+  if(cmPkSpeedT>0)cmPkSpeedT=Math.max(0,cmPkSpeedT-ds);
+  if(cmPkPowerT>0)cmPkPowerT=Math.max(0,cmPkPowerT-ds);
+  if(cmPkArmorT>0)cmPkArmorT=Math.max(0,cmPkArmorT-ds);
+  if(cmPkFreezeT>0)cmPkFreezeT=Math.max(0,cmPkFreezeT-ds);
+  if(cmPkHasteT>0)cmPkHasteT=Math.max(0,cmPkHasteT-ds);
+  updateCmPickups(dt);
+  updateCmStatusEffects(dt);
+  updateCmAmbient(dt);
+}
+
+// ─── 場上掉落道具：定時生成、玩家接觸後拾取生效 ───
+function updateCmPickups(dt){
+  const ds=dt/60;
+  cmPickupTimer-=ds;
+  if(cmPickupTimer<=0){
+    cmPickupTimer=8+Math.random()*6;
+    const type=CM_PICKUPS[Math.floor(Math.random()*CM_PICKUPS.length)];
+    cmPickups.push({x:rand(60,W()-60),y:rand(140,H()*0.68),r:16,type,life:14,ph:Math.random()*Math.PI*2});
+  }
+  for(let i=cmPickups.length-1;i>=0;i--){
+    const p=cmPickups[i];
+    p.life-=ds;p.ph+=dt*0.08;
+    if(p.life<=0){cmPickups.splice(i,1);continue;}
+    if(Math.hypot(p.x-player.x,p.y-player.y)<player.r+p.r){
+      p.type.apply();
+      spawnP(p.x,p.y,p.type.color,14);
+      cmPickups.splice(i,1);
+    }
+  }
+}
+
+// ─── 世界特色狀態效果（中毒/灼燒/凍傷/沙塵暴）───
+function updateCmStatusEffects(dt){
+  const ds=dt/60;
+  if(cmPoisonT>0){
+    cmPoisonT=Math.max(0,cmPoisonT-ds);
+    cmPoisonTick=(cmPoisonTick||0)+ds;
+    if(cmPoisonTick>=0.5){cmPoisonTick=0;cmPlayerHP=Math.max(0,cmPlayerHP-2);spawnP(player.x,player.y,'#44dd99',3);if(cmPlayerHP<=0)cmCheckDeath();}
+  }
+  if(cmBurnT>0){
+    cmBurnT=Math.max(0,cmBurnT-ds);
+    cmBurnTick=(cmBurnTick||0)+ds;
+    if(cmBurnTick>=0.5){cmBurnTick=0;cmPlayerHP=Math.max(0,cmPlayerHP-3);spawnP(player.x,player.y,'#ff6633',3);if(cmPlayerHP<=0)cmCheckDeath();}
+  }
+  if(cmSlowT>0)cmSlowT=Math.max(0,cmSlowT-ds);
+  // 沙塵暴：第三世界場景每隔一段時間揚起沙塵
+  if(CM_WORLDS[cmWorldOf(cmStage)].status==='sandstorm'){
+    cmSandTimer-=ds;
+    if(cmSandTimer<=0){cmSandT=2.5;cmSandTimer=8+Math.random()*5;}
+    if(cmSandT>0)cmSandT=Math.max(0,cmSandT-ds);
+  }
+}
+
+// ─── 環境粒子（依世界主題：火花/落葉/沙塵/雪花/餘燼）───
+function updateCmAmbient(dt){
+  const w=W(),h=H();
+  const world=CM_WORLDS[cmWorldOf(cmStage)];
+  while(cmAmbient.length<36){
+    cmAmbient.push({x:Math.random()*w,y:Math.random()*h,vx:0,vy:0,r:1+Math.random()*2.5,a:0.2+Math.random()*0.5,ph:Math.random()*Math.PI*2});
+  }
+  cmAmbient.forEach(p=>{
+    p.ph+=dt*0.03;
+    switch(world.ambient){
+      case 'snow':p.x+=Math.sin(p.ph)*0.3;p.y+=0.6*dt;break;
+      case 'leaf':p.x+=Math.sin(p.ph)*0.6;p.y+=0.4*dt;break;
+      case 'sand':p.x-=1.1*dt;p.y+=Math.sin(p.ph)*0.2;break;
+      case 'ember':p.x+=Math.sin(p.ph)*0.4;p.y-=0.7*dt;break;
+      default:p.x+=Math.sin(p.ph)*0.15;p.y+=Math.cos(p.ph)*0.15;
+    }
+    if(p.y>h)p.y=-4;if(p.y<-4)p.y=h;
+    if(p.x>w)p.x=-4;if(p.x<-4)p.x=w;
+  });
+}
+
+
+// ─── Player movement ───
+function updatePlayerCombat(dt){
+  const pr=player.r;
+  const baseSpd=5.2*cmSpdMult()*cmSpeedBoost*(cmPkSpeedT>0?1.5:1)*(cmSlowT>0?0.6:1);
+  const spd=cmShielding?baseSpd*0.5:baseSpd;
+  if(cmDashing){
+    player.x=Math.max(pr,Math.min(W()-pr,player.x+cmDashDx*15*dt));
+    player.y=Math.max(62+pr,Math.min(H()-pr,player.y+cmDashDy*15*dt));
+    player.trail.push({x:player.x,y:player.y});
+    if(player.trail.length>22)player.trail.shift();
+    return;
+  }
+  const acc=0.72*dt;
+  if(keysDown['w']||keysDown['W']||keysDown['ArrowUp'])pvy-=acc;
+  else if(keysDown['s']||keysDown['S']||keysDown['ArrowDown'])pvy+=acc;
+  else pvy*=Math.pow(0.78,dt);
+  if(keysDown['a']||keysDown['A']||keysDown['ArrowLeft'])pvx-=acc;
+  else if(keysDown['d']||keysDown['D']||keysDown['ArrowRight'])pvx+=acc;
+  else pvx*=Math.pow(0.78,dt);
+  const len=Math.hypot(pvx,pvy);
+  if(len>spd){pvx=pvx/len*spd;pvy=pvy/len*spd;}
+  player.x=Math.max(pr,Math.min(W()-pr,player.x+pvx*dt));
+  player.y=Math.max(62+pr,Math.min(H()-pr,player.y+pvy*dt));
+  player.trail.push({x:player.x,y:player.y});
+  if(player.trail.length>16)player.trail.shift();
+}
+
+// ── Enemy AI ──
+function updateEnemiesCombat(dt){
+  for(let i=cmEnemies.length-1;i>=0;i--){
+    const e=cmEnemies[i];if(e.dead)continue;
+    const ds=dt/60;
+    if(e.iframes>0)e.iframes=Math.max(0,e.iframes-ds);
+    if(cmPkFreezeT>0)continue; // 冰封結晶：敵人暫停移動與攻擊
+    const dx=player.x-e.x,dy=player.y-e.y,dist=Math.hypot(dx,dy)||1;
+    if(e.ai==='chase'){
+      // 蛇形走位：朝玩家逼近的同時左右橫移，太近時會稍微繞開
+      e.wanderT=(e.wanderT||0)+ds;
+      const strafe=Math.sin(e.wanderT*e.wanderFreq+e.wanderPhase);
+      const px=-dy/dist,py=dx/dist;
+      const approach=dist>150?1:dist>85?0.35:-0.4;
+      e.x+=(dx/dist*approach+px*strafe*0.85)*e.spd*dt;
+      e.y+=(dy/dist*approach+py*strafe*0.85)*e.spd*dt;
+    }else if(e.ai==='kite'){
+      e.wanderT=(e.wanderT||0)+ds;
+      const strafe=Math.sin(e.wanderT*e.wanderFreq+e.wanderPhase);
+      const kd=e.keepDist;
+      const px=-dy/dist,py=dx/dist;
+      if(dist<kd-25){e.x-=dx/dist*e.spd*dt;e.y-=dy/dist*e.spd*dt;}
+      else if(dist>kd+25){e.x+=dx/dist*e.spd*0.65*dt;e.y+=dy/dist*e.spd*0.65*dt;}
+      else{e.x+=px*e.spd*strafe*dt;e.y+=py*e.spd*strafe*dt;}
+    }else if(e.ai==='boss'){
+      e.bossT=(e.bossT||0)+ds*(e.phase>=1?1.6:1);
+      const tx=W()*0.2+(Math.sin(e.bossT*0.5)*0.5+0.5)*W()*0.6;
+      const ty=H()*0.22;
+      e.x+=(tx-e.x)*0.025*e.spd*dt;
+      e.y+=(ty-e.y)*0.025*e.spd*dt;
+    }
+    e.x=Math.max(e.r+10,Math.min(W()-e.r-10,e.x));
+    e.y=Math.max(e.r+80,Math.min(H()*0.72,e.y));
+    e.atkTimer-=ds;
+    if(e.atkTimer<=0){
+      fireCombatEnemy(e);
+      e.atkTimer=e.atkInt*(0.75+Math.random()*0.5);
+      e.atkCount++;
+      if(e.phase===0&&e.type!=='fighter'&&e.type!=='gunner'&&e.hp<=e.maxHp*(e.type==='boss'?0.66:0.5)){
+        e.phase=1;cmShakeF=12;cmShakeStr=7;
+        const enrageMsg={brute:'💢 重裝兵狂暴！',striker:'⚡ 突擊兵加速！',miniboss:'🔥 小BOSS狂暴！',boss:'🔥 大BOSS進入第二階段！'};
+        showNotif(enrageMsg[e.type]||'🔥 敵人狂暴！','#ff6600');
+      }else if(e.type==='boss'&&e.phase===1&&e.hp<=e.maxHp*0.33){
+        e.phase=2;cmShakeF=18;cmShakeStr=9;
+        showNotif('💀 大BOSS 全力解放！','#ff2244');
+      }
+    }
+    for(let j=e.pendingBullets.length-1;j>=0;j--){
+      const pb=e.pendingBullets[j];pb.delay-=ds;
+      if(pb.delay<=0){pb.fn();e.pendingBullets.splice(j,1);}
+    }
+  }
+  cmEnemies=cmEnemies.filter(e=>!e.dead);
+}
+
+// ─── Enemy fire ───
+function fireCombatEnemy(e){
+  const dx=player.x-e.x,dy=player.y-e.y;
+  const base=Math.atan2(dy,dx);const p2=e.phase===1;
+  const shoot=()=>Math.atan2(player.y-e.y,player.x-e.x);
+
+  if(e.type==='fighter'){
+    if(!p2){
+      for(let i=-1.5;i<=1.5;i++){const a=base+i*0.32;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*4.5,Math.sin(a)*4.5,8,'blue',8));}
+      if(e.atkCount%3===2){for(let k=0;k<5;k++){const a=(k/5)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*3.8,Math.sin(a)*3.8,7,'red',12));}}
+    }else{
+      for(let i=-2;i<=2;i++){const a=base+i*0.28;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*5.5,Math.sin(a)*5.5,8,'blue',9));}
+      if(e.atkCount%2===1){for(let k=0;k<6;k++){const a=(k/6)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*4.8,Math.sin(a)*4.8,7,'red',14));}}
+    }
+  }else if(e.type==='gunner'){
+    // 遠程點射：藍色三連發瞄準
+    for(let i=0;i<3;i++)e.pendingBullets.push({delay:i*0.12,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*6,Math.sin(a)*6,7,'blue',9));}});
+    if(p2)e.pendingBullets.push({delay:0.4,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*6,Math.sin(a)*6,7,'blue',9));}});
+    // 每3次夾帶一發紅色狙擊彈
+    if(e.atkCount%3===2)e.pendingBullets.push({delay:0.55,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*11,Math.sin(a)*11,7,'red',18));cmShakeF=4;cmShakeStr=3;}});
+  }else if(e.type==='brute'){
+    // 近戰坦克：360 度藍色彈幕環
+    const n=p2?14:10;
+    for(let k=0;k<n;k++){const a=(k/n)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*(p2?4.6:3.8),Math.sin(a)*(p2?4.6:3.8),9,'blue',10));}
+    // 每2次補一波紅色爆裂
+    if(e.atkCount%2===1){for(let k=0;k<6;k++){const a=(k/6)*Math.PI*2+0.3;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*5.5,Math.sin(a)*5.5,8,'red',16));}cmShakeF=6;cmShakeStr=4;}
+  }else if(e.type==='striker'){
+    // 高速突襲：瞄準的紅色快速彈，狂暴後雙發
+    const a=shoot();
+    cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*7.5,Math.sin(a)*7.5,6,'red',12));
+    if(p2)e.pendingBullets.push({delay:0.12,fn:()=>{const a2=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a2)*8,Math.sin(a2)*8,6,'red',12));}});
+  }else if(e.type==='miniboss'){
+    if(!p2){
+      // 地毯掃射（藍）
+      const n=8;
+      for(let i=0;i<n;i++)e.pendingBullets.push({delay:i*0.08,fn:()=>{
+        const a=shoot();const spread=(Math.random()-.5)*0.4;
+        cmBullets.push(mkEB(e.x,e.y,Math.cos(a+spread)*5,Math.sin(a+spread)*5,9,'blue',10));
+      }});
+      // 每2次補一個圓環（藍）
+      if(e.atkCount%2===1){const n2=12;for(let k=0;k<n2;k++){const a=(k/n2)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*4.5,Math.sin(a)*4.5,8,'blue',10));}}
+    }else{
+      // 狂暴：更快地毯（藍）+ 三連瞄準紅彈 + 全圓爆裂（紅）
+      const n=10;
+      for(let i=0;i<n;i++)e.pendingBullets.push({delay:i*0.06,fn:()=>{
+        const a=shoot();const spread=(Math.random()-.5)*0.5;
+        cmBullets.push(mkEB(e.x,e.y,Math.cos(a+spread)*5.8,Math.sin(a+spread)*5.8,9,'blue',11));
+      }});
+      for(let i=0;i<3;i++)e.pendingBullets.push({delay:0.4+i*0.18,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*11,Math.sin(a)*11,8,'red',20));cmShakeF=4;cmShakeStr=3;}});
+      if(e.atkCount%3===2){for(let k=0;k<8;k++){const a=(k/8)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*6,Math.sin(a)*6,9,'red',15));}cmShakeF=10;cmShakeStr=6;}
+    }
+  }else if(e.type==='boss'){
+    if(e.phase===0){
+      // 第一階段：密集地毯掃射（藍）+ 大型圓環（藍）
+      const n=10;
+      for(let i=0;i<n;i++)e.pendingBullets.push({delay:i*0.07,fn:()=>{
+        const a=shoot();const spread=(Math.random()-.5)*0.4;
+        cmBullets.push(mkEB(e.x,e.y,Math.cos(a+spread)*5,Math.sin(a+spread)*5,9,'blue',11));
+      }});
+      if(e.atkCount%2===1){const n2=14;for(let k=0;k<n2;k++){const a=(k/n2)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*4.5,Math.sin(a)*4.5,8,'blue',11));}}
+    }else if(e.phase===1){
+      // 第二階段：黃色追蹤彈（轉紅）+ 紅色爆裂圓環
+      for(let i=0;i<3;i++)e.pendingBullets.push({delay:i*0.15,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*6,Math.sin(a)*6,9,'yellow',16));}});
+      if(e.atkCount%2===1){const n2=10;for(let k=0;k<n2;k++){const a=(k/n2)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*5.5,Math.sin(a)*5.5,8,'red',16));}cmShakeF=8;cmShakeStr=5;}
+    }else{
+      // 第三階段（全力解放）：全螢幕黃彈雨 + 連續瞄準紅彈 + 紅色爆裂圓環
+      const n=16;
+      for(let i=0;i<n;i++)e.pendingBullets.push({delay:i*0.05,fn:()=>{
+        const a=shoot();const spread=(Math.random()-.5)*0.5;
+        cmBullets.push(mkEB(e.x,e.y,Math.cos(a+spread)*6.5,Math.sin(a+spread)*6.5,9,'yellow',18));
+      }});
+      for(let i=0;i<4;i++)e.pendingBullets.push({delay:0.5+i*0.15,fn:()=>{const a=shoot();cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*12,Math.sin(a)*12,8,'red',22));}});
+      if(e.atkCount%2===1){const n2=12;for(let k=0;k<n2;k++){const a=(k/n2)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*6,Math.sin(a)*6,9,'red',16));}cmShakeF=12;cmShakeStr=7;}
+    }
+  }
+  // 世界特色彈幕：每隔幾次攻擊夾帶該世界的特殊彈
+  if(e.atkCount%4===3)fireWorldSpecial(e,shoot);
+}
+
+// ─── 各世界敵人特殊彈幕 ───
+function fireWorldSpecial(e,shoot){
+  const world=CM_WORLDS[cmWorldOf(cmStage)];
+  switch(world.ambient){
+    case 'leaf':{
+      // 第二世界：孢子彈，緩速並追蹤玩家
+      const a=shoot();
+      const sp=mkEB(e.x,e.y,Math.cos(a)*3,Math.sin(a)*3,10,'blue',9,'spore');
+      sp.homingTarget='player';
+      cmBullets.push(sp);
+      break;
+    }
+    case 'sand':{
+      // 第三世界：沙塵彈幕，扇形噴射大量低速沙粒
+      const a=shoot();
+      for(let i=-2;i<=2;i++){const a2=a+i*0.18;cmBullets.push(mkEB(e.x,e.y,Math.cos(a2)*3.2,Math.sin(a2)*3.2,11,'blue',8,'sand'));}
+      break;
+    }
+    case 'snow':{
+      // 第四世界：冰晶環，大型緩速彈，命中造成凍傷
+      const n=8;
+      for(let k=0;k<n;k++){const a=(k/n)*Math.PI*2;cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*3,Math.sin(a)*3,12,'blue',10,'shard'));}
+      break;
+    }
+    case 'ember':{
+      // 第五世界：火焰彈，高速且不可擋，命中造成灼燒
+      const a=shoot();
+      cmBullets.push(mkEB(e.x,e.y,Math.cos(a)*9,Math.sin(a)*9,8,'red',14,'fire'));
+      cmShakeF=4;cmShakeStr=2;
+      break;
+    }
+  }
+}
+function mkEB(x,y,dx,dy,r,color,dmg,variant){
+  const fills={blue:'#3399ff',red:'#ff2233',yellow:'#ffcc00',reflected:'#ffffff'};
+  const rims ={blue:'#001133',red:'#330011',yellow:'#443300',reflected:'#888888'};
+  // variant 只影響外觀（世界特色彈幕），不影響可擋/不可擋判定（仍由 color 決定）
+  const vFills={spore:'#55ff99',sand:'#ffcc66',shard:'#aef0ff',fire:'#ff7733'};
+  const vRims ={spore:'#114422',sand:'#553311',shard:'#225566',fire:'#661100'};
+  return{x,y,dx,dy,r,color,variant,
+    bFill:vFills[variant]||fills[color]||'#fff',
+    bRim:vRims[variant]||rims[color]||'#333',
+    dmg,age:0,yellowT:color==='yellow'?0:null};
+}
+
+// ─── Update bullets ───
+function updateCmBullets(dt){
+  if(cmParryWin>0)cmParryWin=Math.max(0,cmParryWin-dt/60);
+  if(cmParryCD>0)cmParryCD=Math.max(0,cmParryCD-dt/60);
+  for(let i=cmBullets.length-1;i>=0;i--){
+    const b=cmBullets[i];
+    if(b.color==='reflected'&&b.homing&&!b.homing.dead&&b.age<1){
+      const spd=Math.hypot(b.dx,b.dy)||4;
+      const ed=Math.hypot(b.homing.x-b.x,b.homing.y-b.y)||1;
+      const tdx=(b.homing.x-b.x)/ed*spd,tdy=(b.homing.y-b.y)/ed*spd;
+      b.dx+=(tdx-b.dx)*0.25;b.dy+=(tdy-b.dy)*0.25;
+    }
+    if(b.homingTarget==='player'){
+      const spd=Math.hypot(b.dx,b.dy)||3;
+      const ed=Math.hypot(player.x-b.x,player.y-b.y)||1;
+      const tdx=(player.x-b.x)/ed*spd,tdy=(player.y-b.y)/ed*spd;
+      b.dx+=(tdx-b.dx)*0.04;b.dy+=(tdy-b.dy)*0.04;
+    }
+    b.x+=b.dx*dt;b.y+=b.dy*dt;b.age+=dt/60;
+    if(b.yellowT!==null){b.yellowT+=dt/60;if(b.yellowT>=2){b.color='red';b.bFill='#ff2233';b.bRim='#330011';b.yellowT=null;}}
+    if(cmShielding&&b.color==='blue'){
+      const bAng=Math.atan2(b.y-player.y,b.x-player.x);
+      const fAng=Math.atan2(cmMY-player.y,cmMX-player.x);
+      let diff=bAng-fAng;while(diff>Math.PI)diff-=Math.PI*2;while(diff<-Math.PI)diff+=Math.PI*2;
+      if(Math.abs(diff)<Math.PI*0.45){
+        const dist=Math.hypot(b.x-player.x,b.y-player.y);
+        if(dist<player.r+b.r+55){
+          if(cmParryWin>0&&cmParryCD<=0){
+            const ne=cmNearestEnemy();
+            if(ne){const spd=Math.hypot(b.dx,b.dy)||4;const ed=Math.hypot(ne.x-b.x,ne.y-b.y)||1;b.dx=(ne.x-b.x)/ed*spd*2.2;b.dy=(ne.y-b.y)/ed*spd*2.2;b.color='reflected';b.bFill='#ffffff';b.bRim='#aaaaaa';b.age=0;b.homing=ne;spawnP(b.x,b.y,'#ffffff',8);showNotif('✨ 彈反！','#fff');cmParryCD=CM_PARRY_CD;cmParryWin=0;}
+            else{spawnP(b.x,b.y,b.bFill,5);cmBullets.splice(i,1);}
+          }else{spawnP(b.x,b.y,b.bFill,4);cmBullets.splice(i,1);}
+          continue;
+        }
+      }
+    }
+    if(b.y>H()+80||b.x<-80||b.x>W()+80||b.y<-80)cmBullets.splice(i,1);
+  }
+}
+
+function updateCmPBullets(dt){
+  for(let i=cmPBullets.length-1;i>=0;i--){
+    const b=cmPBullets[i];b.px=b.x;b.py=b.y;b.x+=b.dx*dt;b.y+=b.dy*dt;b.age+=dt/60;
+    if(b.y>H()+40||b.x<-40||b.x>W()+40||b.y<-40||b.age>2)cmPBullets.splice(i,1);
+  }
+}
+
+// ─── Hit detection ───
+function checkCombatHits(){
+  if(cmDashIF<=0&&cmHitIF<=0){
+    for(let i=cmBullets.length-1;i>=0;i--){
+      const b=cmBullets[i];if(b.color==='reflected')continue;
+      if(Math.hypot(b.x-player.x,b.y-player.y)<player.r*0.55+b.r){
+        const dmg=(cmArmorOn||cmPkArmorT>0)?Math.ceil(b.dmg*0.5):b.dmg;
+        hitCombatPlayer(dmg);spawnP(b.x,b.y,b.bFill,6);cmBullets.splice(i,1);
+      }
+    }
+  }
+  for(let i=cmBullets.length-1;i>=0;i--){
+    const b=cmBullets[i];if(b.color!=='reflected')continue;
+    for(const e of cmEnemies){
+      if(!e.dead&&Math.hypot(b.x-e.x,b.y-e.y)<e.r+b.r){hitCombatEnemy(e,15);spawnP(b.x,b.y,'#ffffff',6);cmBullets.splice(i,1);break;}
+    }
+  }
+  for(let i=cmPBullets.length-1;i>=0;i--){
+    const b=cmPBullets[i];
+    const px=b.px??b.x,py=b.py??b.y;
+    for(const e of cmEnemies){
+      if(!e.dead&&segDist(px,py,b.x,b.y,e.x,e.y)<e.r+b.r){
+        if(b.explode){
+          cmEnemies.forEach(e2=>{
+            if(e2.dead)return;
+            const d=Math.hypot(e2.x-b.x,e2.y-b.y);
+            if(d<b.blastR+e2.r)hitCombatEnemy(e2,b.blastDmg);
+          });
+          cmGunHits.push({x:b.x,y:b.y,life:1,blast:b.blastR});
+          spawnP(b.x,b.y,'#ff9944',16);
+          cmShakeF=6;cmShakeStr=4;
+          cmPBullets.splice(i,1);
+        }else{
+          hitCombatEnemy(e,b.dmg);
+          cmGunHits.push({x:b.x,y:b.y,life:1});
+          if((b.pierce||0)>0)b.pierce--;
+          else cmPBullets.splice(i,1);
+        }
+        break;
+      }
+    }
+  }
+}
+function hitCombatPlayer(dmg){
+  cmPlayerHP=Math.max(0,cmPlayerHP-dmg);
+  cmHitIF=0.6;cmShakeF=6;cmShakeStr=5;
+  // 世界特色：被擊中時附加特殊狀態
+  const status=CM_WORLDS[cmWorldOf(cmStage)].status;
+  if(status==='poison')cmPoisonT=Math.max(cmPoisonT,3);
+  else if(status==='burn')cmBurnT=Math.max(cmBurnT,3);
+  else if(status==='slow')cmSlowT=Math.max(cmSlowT,2);
+  if(cmPlayerHP<=0)cmCheckDeath();
+}
+function hitCombatEnemy(e,dmg){
+  if(e.iframes>0||e.dead)return;
+  e.hp-=dmg;e.iframes=0.15;
+  spawnP(e.x,e.y,e.color,5);
+  if(e.hp<=0){
+    e.dead=true;spawnP(e.x,e.y,e.color,18);cmShakeF=8;cmShakeStr=5;
+  }
+}
+// 線段(ax,ay)-(bx,by) 到點(px,py)的最短距離（解決高速子彈穿過判定點的問題）
+function segDist(ax,ay,bx,by,px,py){
+  const dx=bx-ax,dy=by-ay;
+  const len2=dx*dx+dy*dy;
+  if(len2===0)return Math.hypot(px-ax,py-ay);
+  let t=((px-ax)*dx+(py-ay)*dy)/len2;
+  t=Math.max(0,Math.min(1,t));
+  return Math.hypot(px-(ax+dx*t),py-(ay+dy*t));
+}
+function cmNearestEnemy(){let n=null,nd=Infinity;cmEnemies.forEach(e=>{const d=Math.hypot(e.x-player.x,e.y-player.y);if(d<nd){nd=d;n=e;}});return n;}
+
+function checkCombatClear(){
+  if(cmWaveTransition)return;
+  if(cmEnemies.length===0||cmEnemies.some(e=>!e.dead))return;
+  cmWaveTransition=true;
+  const st=COMBAT_STAGES[cmStage];
+  const nextWave=cmWave+1;
+  if(nextWave<st.waves.length){
+    cmBullets=[];
+    showNotif(`✨ Wave ${cmWave+1} 完成！`,'#44ff88');
+    cmTransitionTimer=1.1;
+    cmTransitionAction=()=>{cmWave=nextWave;cmSpawnWave(cmStage,cmWave);};
+  }else{
+    const nextStage=cmStage+1;
+    if(nextStage<COMBAT_STAGES.length&&!cmStageUnlocked[nextStage]){
+      cmStageUnlocked[nextStage]=true;
+    }
+    const xpGain=cmAwardStageXP(cmStage);
+    showNotif(`✨ CLEAR！+${xpGain} XP`,'#44ff88');
+    cmTransitionTimer=0.9;
+    cmTransitionAction=()=>cmBattleOver(true);
+  }
+}
+
+function cmBattleOver(win){
+  if(cmRaf){cancelAnimationFrame(cmRaf);cmRaf=null;}
+  gstate='menu';
+  goT.textContent=win?'⚔ 試煉完成！':'💀 戰鬥失敗';
+  goT.style.color=win?'#ffdd44':'#ff2d78';
+  goSc.textContent=`STAGE ${cmStage+1}/${COMBAT_STAGES.length}`;
+  goBv.textContent='';
+  goSt.style.gridTemplateColumns='repeat(2,1fr)';
+  goSt.innerHTML=`<div class="gs"><div class="gs-v">${cmPlayerHP}</div><div class="gs-l">HP 剩餘</div></div>
+  <div class="gs"><div class="gs-v">${cmStage+1}/${COMBAT_STAGES.length}</div><div class="gs-l">STAGE</div></div>`;
+  goMd.innerHTML='';
+  document.querySelector('#go .go-bn').innerHTML=`
+    <button class="gb pri" onclick="startCombat(${cmStage})">再挑一次</button>
+    <button class="gb" onclick="goUI.style.display='none';showBattleMenu()">返回關卡選擇</button>
+    <button class="gb" onclick="showMenu()">返回主選單</button>`;
+  dbBm.style.display='none';dbPs.style.display='none';
+  goUI.style.display='flex';
+  cleanupCombat();goUI.style.display='flex';
+}
+
+// ─── Mouse events ───
+canvas.addEventListener('mousedown',ev=>{
+  if(gstate!=='combat')return;
+  if(ev.button===0){cmFiring=true;if(cmShielding)cmParryWin=0.12;if(cmGunCD<=0&&!cmShielding)doCombatGun();}
+  else if(ev.button===2){
+    const m=CM_MELEES[cmMeleeType];
+    if(m.mode==='shield'){cmShielding=true;}
+    else if(cmMeleeCD<=0)doMeleeStrike(m);
+  }
+});
+canvas.addEventListener('mouseup',ev=>{
+  if(gstate!=='combat')return;
+  if(ev.button===0)cmFiring=false;
+  else if(ev.button===2)cmShielding=false;
+});
+canvas.addEventListener('contextmenu',ev=>{if(gstate==='combat')ev.preventDefault();});
+canvas.addEventListener('mousemove',ev=>{
+  if(gstate!=='combat')return;
+  const r=canvas.getBoundingClientRect();
+  cmMX=(ev.clientX-r.left)*(W()/r.width);
+  cmMY=(ev.clientY-r.top)*(H()/r.height);
+});
+
+function useCombatItem(){
+  const it=CM_ITEMS[cmSelItem];
+  if(!it||!it.use||cmItemCD>0)return;
+  it.use();
+  cmItemCD=it.cd;
+  if(it.dur)cmItemBuffT=it.dur;
+  showNotif(`${it.icon} 使用：${it.name}`,'#ffdd66');
+}
+
+function fireGunShot(gun){
+  const fa=Math.atan2(cmMY-player.y,cmMX-player.x);
+  const mx=player.x+Math.cos(fa)*(player.r+10),my=player.y+Math.sin(fa)*(player.r+10);
+  const perpX=-Math.sin(fa),perpY=Math.cos(fa);
+  const offsets=gun.dual?[-gun.dualOffset/2,gun.dualOffset/2]:[0];
+  for(const off of offsets){
+    const ox=mx+perpX*off,oy=my+perpY*off;
+    for(let i=0;i<gun.pellets;i++){
+      const a=fa+(gun.spread>0?(Math.random()-0.5)*gun.spread*2:0);
+      cmPBullets.push({x:ox,y:oy,dx:Math.cos(a)*gun.spd,dy:Math.sin(a)*gun.spd,r:4,dmg:Math.round(gun.dmg*cmPowerMult*(cmPkPowerT>0?1.5:1)),angle:a,age:0,pierce:gun.pierce,len:gun.len,color:gun.color,explode:gun.explode,blastR:gun.blastR,blastDmg:gun.blastDmg});
+    }
+    spawnP(ox,oy,gun.flash,4);
+  }
+  cmGunFlash=0.06;
+}
+
+function doCombatGun(){
+  if(cmGunCD>0)return;
+  const gun=getGunStats(cmGunType);
+  cmGunCD=gun.cd*(cmPkHasteT>0?0.7:1);
+  fireGunShot(gun);
+  if(gun.burst>1)cmBurst={gun,remaining:gun.burst-1,timer:gun.burstDelay};
+}
+
+function doMeleeStrike(m){
+  cmMeleeCD=m.cd*cmCDMult*(cmPkHasteT>0?0.7:1);
+  const fa=Math.atan2(cmMY-player.y,cmMX-player.x);
+  const ca=Math.cos(fa),sa=Math.sin(fa);
+  cmEnemies.forEach(e=>{
+    if(e.dead)return;
+    const dx=e.x-player.x,dy=e.y-player.y;
+    const d=Math.hypot(dx,dy);
+    if(m.line){
+      // 沿瞄準方向的一條直線判定
+      const proj=dx*ca+dy*sa;
+      const perp=Math.abs(-dx*sa+dy*ca);
+      if(proj<-e.r||proj>player.r+m.range+e.r||perp>m.width+e.r)return;
+    }else{
+      if(d>player.r+e.r+m.range)return;
+      if(m.arc<Math.PI*2){
+        const ea=Math.atan2(dy,dx);
+        let diff=ea-fa;while(diff>Math.PI)diff-=Math.PI*2;while(diff<-Math.PI)diff+=Math.PI*2;
+        if(Math.abs(diff)>m.arc/2)return;
+      }
+    }
+    hitCombatEnemy(e,Math.round(m.dmg*cmPowerMult*(cmPkPowerT>0?1.5:1)));
+    if(m.knock){const kd=d||1;e.x+=dx/kd*m.knock;e.y+=dy/kd*m.knock;}
+  });
+  cmMeleeFX={type:cmMeleeType,life:1,angle:fa};
+  spawnP(player.x+Math.cos(fa)*player.r,player.y+Math.sin(fa)*player.r,m.color,12);
+  cmShakeF=m.knock?8:4;cmShakeStr=m.knock?5:3;
+}
+
+function doCombatFSkill(){
+  if(cmDashCD>0)return;
+  const sk=CM_FSKILLS[cmSelFSkill];
+  cmDashCD=sk.cd*cmCDMult*(cmPkHasteT>0?0.7:1);
+  let dx=0,dy=0;
+  if(keysDown['w']||keysDown['W']||keysDown['ArrowUp'])dy-=1;
+  if(keysDown['s']||keysDown['S']||keysDown['ArrowDown'])dy+=1;
+  if(keysDown['a']||keysDown['A']||keysDown['ArrowLeft'])dx-=1;
+  if(keysDown['d']||keysDown['D']||keysDown['ArrowRight'])dx+=1;
+  if(dx===0&&dy===0){const a=Math.atan2(cmMY-player.y,cmMX-player.x);dx=Math.cos(a);dy=Math.sin(a);}
+  const d=Math.hypot(dx,dy)||1;dx/=d;dy/=d;
+
+  if(cmSelFSkill===0){
+    // 衝刺：短距位移＋無敵＋沿途傷害
+    cmDashDx=dx;cmDashDy=dy;cmDashing=true;cmDashT=0.15;cmDashIF=0.5;
+    cmEnemies.forEach(e=>{if(!e.dead&&Math.hypot(e.x-player.x,e.y-player.y)<e.r+player.r+60)hitCombatEnemy(e,20);});
+    spawnP(player.x,player.y,'#4488ff',12);
+  }else if(cmSelFSkill===1){
+    // 瞬步突襲：瞬間移動＋範圍傷害
+    const pr=player.r;
+    player.x=Math.max(pr,Math.min(W()-pr,player.x+dx*140));
+    player.y=Math.max(62+pr,Math.min(H()-pr,player.y+dy*140));
+    cmDashIF=0.4;
+    cmEnemies.forEach(e=>{if(!e.dead&&Math.hypot(e.x-player.x,e.y-player.y)<e.r+player.r+50)hitCombatEnemy(e,25);});
+    spawnP(player.x,player.y,'#bb88ff',16);
+  }else if(cmSelFSkill===2){
+    // 衝擊波：原地擊退＋傷害
+    cmDashIF=0.2;
+    cmEnemies.forEach(e=>{
+      if(e.dead)return;
+      const ddx=e.x-player.x,ddy=e.y-player.y,dist=Math.hypot(ddx,ddy)||1;
+      if(dist<player.r+e.r+180){hitCombatEnemy(e,35);e.x+=ddx/dist*30;e.y+=ddy/dist*30;}
+    });
+    cmShakeF=10;cmShakeStr=6;
+    spawnP(player.x,player.y,'#ffaa44',20);
+  }else if(cmSelFSkill===3){
+    // 幻影突進：高傷害衝刺＋擊退
+    cmDashDx=dx;cmDashDy=dy;cmDashing=true;cmDashT=0.18;cmDashIF=0.6;
+    cmEnemies.forEach(e=>{
+      if(e.dead)return;
+      const dist=Math.hypot(e.x-player.x,e.y-player.y)||1;
+      if(dist<e.r+player.r+70){hitCombatEnemy(e,40);e.x+=dx*24;e.y+=dy*24;}
+    });
+    spawnP(player.x,player.y,'#ffffff',14);
+  }else{
+    // 生命躍動：位移＋回復HP
+    cmDashDx=dx;cmDashDy=dy;cmDashing=true;cmDashT=0.15;cmDashIF=0.5;
+    cmPlayerHP=Math.min(cmPlayerMaxHP,cmPlayerHP+8);
+    spawnP(player.x,player.y,'#44ff88',14);
+  }
+}
+
+function toggleCombatPause(){
+  cmPaused=!cmPaused;
+  if(!cmPaused&&cmRaf===null){cmLastTS=0;cmRaf=requestAnimationFrame(loopCombat);}
+}
+
+// ─── Render ───
+function renderCombat(dt){
+  const w=W(),h=H();
+  let ox=0,oy=0;
+  if(cmShakeF>0){ox=(Math.random()-.5)*cmShakeStr*2;oy=(Math.random()-.5)*cmShakeStr*2;}
+  ctx.save();if(ox||oy)ctx.translate(ox,oy);
+  ctx.clearRect(-8,-8,w+16,h+16);
+  const world=CM_WORLDS[cmWorldOf(cmStage)];
+  const bgGrad=ctx.createLinearGradient(0,0,0,h);
+  bgGrad.addColorStop(0,world.bg.top);bgGrad.addColorStop(1,world.bg.bottom);
+  ctx.fillStyle=bgGrad;ctx.fillRect(-8,-8,w+16,h+16);
+  // Grid
+  ctx.strokeStyle=world.bg.grid;ctx.lineWidth=1;
+  for(let y2=0;y2<h;y2+=46){ctx.beginPath();ctx.moveTo(0,y2);ctx.lineTo(w,y2);ctx.stroke();}
+  // 環境粒子（世界特色）
+  cmAmbient.forEach(p=>{
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    switch(world.ambient){
+      case 'snow':ctx.fillStyle=`rgba(220,240,255,${p.a})`;break;
+      case 'leaf':ctx.fillStyle=`rgba(120,255,170,${p.a*0.8})`;break;
+      case 'sand':ctx.fillStyle=`rgba(255,200,120,${p.a*0.7})`;break;
+      case 'ember':ctx.fillStyle=`rgba(255,120,60,${p.a})`;break;
+      default:ctx.fillStyle=`rgba(255,180,180,${p.a*0.5})`;
+    }
+    ctx.fill();
+  });
+  // 沙塵暴遮罩（第三世界）
+  if(cmSandT>0){
+    ctx.fillStyle=`rgba(200,140,60,${Math.min(0.35,cmSandT*0.15)})`;
+    ctx.fillRect(-8,-8,w+16,h+16);
+  }
+
+  // 場上掉落道具
+  cmPickups.forEach(p=>{
+    const bob=Math.sin(p.ph)*4;
+    const fade=p.life<2?p.life/2:1;
+    ctx.save();
+    ctx.globalAlpha=fade;
+    ctx.shadowColor=p.type.color;ctx.shadowBlur=14;
+    ctx.beginPath();ctx.arc(p.x,p.y+bob,p.r,0,Math.PI*2);
+    const pg=ctx.createRadialGradient(p.x-p.r*.3,p.y+bob-p.r*.35,1,p.x,p.y+bob,p.r);
+    pg.addColorStop(0,'#fff');pg.addColorStop(.5,p.type.color);pg.addColorStop(1,p.type.color+'55');
+    ctx.fillStyle=pg;ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha=fade;
+    ctx.font='16px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle='#fff';
+    ctx.fillText(p.type.icon,p.x,p.y+bob);
+    ctx.restore();
+  });
+
+  // Enemy bullets
+  cmBullets.forEach(b=>{
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    const bg=ctx.createRadialGradient(b.x-b.r*.3,b.y-b.r*.35,1,b.x,b.y,b.r);
+    bg.addColorStop(0,'#fff');bg.addColorStop(.45,b.bFill);bg.addColorStop(1,b.bRim);
+    ctx.fillStyle=bg;ctx.fill();
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r+2.5,0,Math.PI*2);
+    ctx.strokeStyle=b.bFill+'44';ctx.lineWidth=2;ctx.stroke();
+  });
+
+  // Player bullets
+  cmPBullets.forEach(b=>{
+    const len=b.len||14;
+    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.angle||0);
+    ctx.shadowColor=b.color||'#ffee88';ctx.shadowBlur=6;
+    ctx.fillStyle=b.color||'#fff8cc';
+    ctx.fillRect(-len/2,-1.5,len,3);
+    ctx.restore();
+  });
+
+  // Enemies
+  cmEnemies.forEach(e=>{
+    if(e.dead)return;
+    const flash=e.iframes>0&&Math.floor(e.iframes*20)%2;
+    ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,Math.PI*2);
+    const eg=ctx.createRadialGradient(e.x-e.r*.3,e.y-e.r*.35,1,e.x,e.y,e.r);
+    eg.addColorStop(0,flash?'#ffffff':e.color+'dd');
+    eg.addColorStop(1,flash?'#aaaaaa':(world.tint||e.rim)+'cc');
+    ctx.fillStyle=eg;ctx.fill();
+    ctx.beginPath();ctx.arc(e.x,e.y,e.r+2,0,Math.PI*2);
+    ctx.strokeStyle=e.color+'88';ctx.lineWidth=2;ctx.stroke();
+    const bw=e.r*3,bh=6,bxe=e.x-bw/2,bye=e.y-e.r-14;
+    ctx.fillStyle='#222';ctx.fillRect(bxe,bye,bw,bh);
+    const pct=Math.max(0,e.hp/e.maxHp);
+    ctx.fillStyle=pct>0.5?'#44ff44':pct>0.25?'#ffaa00':'#ff2222';
+    ctx.fillRect(bxe,bye,bw*pct,bh);
+  });
+
+  // Player trail
+  for(let i=0;i<player.trail.length;i++){
+    const t=player.trail[i],a=(i/player.trail.length)*.3;
+    ctx.beginPath();ctx.arc(t.x,t.y,player.r*(i/player.trail.length),0,Math.PI*2);
+    ctx.fillStyle=cmDashing?`rgba(68,136,255,${a})`:`rgba(0,245,255,${a})`;ctx.fill();
+  }
+
+  const pr=player.r;
+  const blink=cmHitIF>0&&Math.floor(cmHitIF*14)%2===0;
+
+  // Shield visual
+  if(cmShielding){
+    const fa=Math.atan2(cmMY-player.y,cmMX-player.x);
+    const parry=cmParryWin>0&&cmParryCD<=0;
+    const onCd=cmParryCD>0;
+    ctx.save();
+    ctx.shadowColor=parry?'#ffffff':onCd?'#666688':'#4488ff';ctx.shadowBlur=parry?22:10;
+    ctx.beginPath();ctx.arc(player.x,player.y,pr+18,fa-Math.PI*0.45,fa+Math.PI*0.45);
+    const sg=ctx.createLinearGradient(player.x,player.y-pr-18,player.x,player.y+pr+18);
+    sg.addColorStop(0,parry?'rgba(255,255,255,.95)':onCd?'rgba(120,120,150,.6)':'rgba(120,180,255,.8)');
+    sg.addColorStop(1,parry?'rgba(180,220,255,.5)':onCd?'rgba(80,80,110,.3)':'rgba(68,136,255,.35)');
+    ctx.strokeStyle=sg;ctx.lineWidth=parry?8:6;ctx.stroke();
+    ctx.restore();
+    if(parry){
+      ctx.beginPath();ctx.arc(player.x,player.y,pr+18,fa-Math.PI*0.45,fa+Math.PI*0.45);
+      ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=2;ctx.stroke();
+    }
+  }
+  // Melee strike FX
+  if(cmMeleeFX){
+    const m=CM_MELEES[cmMeleeFX.type],a=cmMeleeFX.life;
+    ctx.save();
+    ctx.shadowColor=m.color;ctx.shadowBlur=16*a;
+    ctx.strokeStyle=m.color;ctx.globalAlpha=a;
+    if(m.line){
+      ctx.lineWidth=m.width*2*a;ctx.lineCap='round';
+      const fa=cmMeleeFX.angle;
+      const x1=player.x+Math.cos(fa)*pr,y1=player.y+Math.sin(fa)*pr;
+      const x2=player.x+Math.cos(fa)*(pr+m.range),y2=player.y+Math.sin(fa)*(pr+m.range);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }else if(m.arc>=Math.PI*2){
+      ctx.lineWidth=4;
+      ctx.beginPath();ctx.arc(player.x,player.y,pr+m.range*(1-a*0.4),0,Math.PI*2);ctx.stroke();
+    }else{
+      ctx.lineWidth=5;ctx.lineCap='round';
+      ctx.beginPath();ctx.arc(player.x,player.y,pr+m.range*0.7,cmMeleeFX.angle-m.arc/2,cmMeleeFX.angle+m.arc/2);ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // Player body
+  if(!blink){
+    ctx.beginPath();ctx.arc(player.x,player.y,pr,0,Math.PI*2);
+    const pg=ctx.createRadialGradient(player.x-pr*.3,player.y-pr*.3,1,player.x,player.y,pr);
+    pg.addColorStop(0,cmDashIF>0?'#eeeeff':'#9afeff');
+    pg.addColorStop(1,cmDashIF>0?'#7777cc':'#006080');
+    ctx.fillStyle=pg;ctx.fill();
+    ctx.beginPath();ctx.arc(player.x,player.y,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+    const fa2=Math.atan2(cmMY-player.y,cmMX-player.x);
+    // Gun barrel
+    ctx.save();ctx.translate(player.x,player.y);ctx.rotate(fa2);
+    ctx.fillStyle=CM_GUNS[cmSelGuns[cmGunType]].color;ctx.fillRect(pr*0.4,-2.5,pr+10,5);
+    ctx.restore();
+  }
+  // Muzzle flash
+  if(cmGunFlash>0){
+    const fa2=Math.atan2(cmMY-player.y,cmMX-player.x);
+    const alpha=cmGunFlash/0.06;
+    const mx=player.x+Math.cos(fa2)*(pr+10),my=player.y+Math.sin(fa2)*(pr+10);
+    ctx.save();
+    ctx.shadowColor=CM_GUNS[cmSelGuns[cmGunType]].flash;ctx.shadowBlur=14*alpha;
+    ctx.beginPath();ctx.arc(mx,my,5*alpha+2,0,Math.PI*2);
+    ctx.globalAlpha=alpha;ctx.fillStyle=CM_GUNS[cmSelGuns[cmGunType]].flash;ctx.fill();
+    ctx.restore();
+  }
+  // Gun impact sparks
+  for(let i=cmGunHits.length-1;i>=0;i--){
+    const sh=cmGunHits[i];sh.life-=dt/10;
+    if(sh.life<=0){cmGunHits.splice(i,1);continue;}
+    if(sh.blast){
+      const r=(1-sh.life)*sh.blast;
+      ctx.beginPath();ctx.arc(sh.x,sh.y,r,0,Math.PI*2);
+      ctx.strokeStyle=`rgba(255,150,60,${sh.life*0.7})`;ctx.lineWidth=3;ctx.stroke();
+      ctx.fillStyle=`rgba(255,120,40,${sh.life*0.25})`;ctx.fill();
+      continue;
+    }
+    const r=(1-sh.life)*14+3;
+    ctx.beginPath();ctx.arc(sh.x,sh.y,r,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,255,200,${sh.life*0.8})`;ctx.lineWidth=2;ctx.stroke();
+    ctx.beginPath();ctx.arc(sh.x,sh.y,r*0.5,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,200,120,${sh.life*0.6})`;ctx.lineWidth=1.5;ctx.stroke();
+  }
+
+  // Particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=.1*dt;p.life-=p.decay*dt;
+    if(p.life<=0){particles.splice(i,1);continue;}
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2);
+    ctx.fillStyle=p.color+Math.floor(p.life*255).toString(16).padStart(2,'0');ctx.fill();
+  }
+
+  ctx.restore();
+  renderCombatHUD(w,h);
+  if(cmPaused){
+    ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,0,w,h);
+    ctx.font='bold 28px Orbitron,monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle='#fff';ctx.fillText('PAUSED',w/2,h/2);
+    ctx.font='14px Noto Sans TC';ctx.fillStyle='rgba(255,255,255,.5)';ctx.fillText('按P繼續',w/2,h/2+36);
+  }
+}
+
+function renderCombatHUD(w,h){
+  // ── Player HP (big, prominent) ──
+  const bw=230,bh=22,bx=14,by=h-bh-66;
+  const hpFrac=Math.max(0,cmPlayerHP/cmPlayerMaxHP);
+  const lowHP=hpFrac<0.3;
+  // Outer glow when low
+  if(lowHP){
+    ctx.shadowColor='#ff2200';ctx.shadowBlur=12+Math.sin(Date.now()/180)*6;
+  }
+  // Bar background
+  ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(bx-3,by-3,bw+6,bh+6);
+  ctx.fillStyle='#1a0000';ctx.fillRect(bx,by,bw,bh);
+  // HP fill
+  const hpColor=hpFrac>0.5?'#ff3355':hpFrac>0.25?'#ff7700':'#ff1100';
+  ctx.fillStyle=hpColor;ctx.fillRect(bx,by,bw*hpFrac,bh);
+  // Shine overlay
+  ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(bx,by,bw*hpFrac,bh/2);
+  // Border
+  ctx.strokeStyle=lowHP?'#ff4400':'rgba(255,80,80,.5)';ctx.lineWidth=1.5;ctx.strokeRect(bx,by,bw,bh);
+  ctx.shadowBlur=0;ctx.shadowColor='transparent';
+  // HP text
+  ctx.font='bold 13px Orbitron,monospace';ctx.textAlign='left';ctx.textBaseline='middle';
+  ctx.fillStyle='#fff';ctx.fillText(`❤  ${cmPlayerHP} / ${cmPlayerMaxHP}`,bx+6,by+bh/2+1);
+
+  // ── 玩家狀態效果列（中毒/灼燒/減速/拾取道具增益等）──
+  {
+    const effects=[];
+    if(cmPoisonT>0)effects.push({icon:'☣',label:'中毒',t:cmPoisonT,col:'#44dd99'});
+    if(cmBurnT>0)effects.push({icon:'☄',label:'灼燒',t:cmBurnT,col:'#ff6633'});
+    if(cmSlowT>0)effects.push({icon:'🐢',label:'減速',t:cmSlowT,col:'#88aaff'});
+    if(cmPkSpeedT>0)effects.push({icon:'💨',label:'加速',t:cmPkSpeedT,col:'#66ddff'});
+    if(cmPkPowerT>0)effects.push({icon:'🔥',label:'強化',t:cmPkPowerT,col:'#ff8844'});
+    if(cmPkArmorT>0)effects.push({icon:'🛡',label:'護盾',t:cmPkArmorT,col:'#88aaff'});
+    if(cmPkHasteT>0)effects.push({icon:'⚡',label:'過載',t:cmPkHasteT,col:'#ffff66'});
+    if(cmHitIF>0)effects.push({icon:'✨',label:'無敵',t:cmHitIF,col:'#ffffff'});
+    if(effects.length){
+      let ex=bx,ey=by-12;
+      ctx.textAlign='left';ctx.textBaseline='middle';
+      effects.forEach(fx=>{
+        ctx.font='14px sans-serif';ctx.fillStyle=fx.col;
+        ctx.shadowColor=fx.col;ctx.shadowBlur=6;
+        ctx.fillText(fx.icon,ex,ey);
+        ctx.shadowBlur=0;ctx.shadowColor='transparent';
+        ctx.font='bold 10px Orbitron,monospace';
+        ctx.fillText(fx.t.toFixed(1),ex+16,ey);
+        ex+=44;
+      });
+    }
+  }
+
+  // ── Boss HP bars（每個小BOSS/大BOSS各一條）──
+  const bosses=cmEnemies.filter(e=>(e.type==='miniboss'||e.type==='boss')&&!e.dead);
+  bosses.forEach((boss,bi)=>{
+    const isFinal=boss.type==='boss';
+    const bbw=Math.min(420,w-40),bbh=18,bbx=(w-bbw)/2,bby=14+bi*(bbh+6);
+    const bf=Math.max(0,boss.hp/boss.maxHp);
+    ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(bbx-3,bby-3,bbw+6,bbh+6);
+    ctx.fillStyle='#221100';ctx.fillRect(bbx,bby,bbw,bbh);
+    ctx.shadowColor=boss.phase>=1?'#ff4400':'#ffaa00';ctx.shadowBlur=8;
+    ctx.fillStyle=boss.phase>=1?'#ff5500':'#ffcc00';ctx.fillRect(bbx,bby,bbw*bf,bbh);
+    ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    ctx.strokeStyle=boss.phase>=1?'rgba(255,80,0,.7)':'rgba(255,200,0,.5)';ctx.lineWidth=1.5;ctx.strokeRect(bbx,bby,bbw,bbh);
+    ctx.font='bold 12px Orbitron,monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+    const label=isFinal?'💀 大BOSS':'👑 小BOSS';
+    const rageTag=boss.phase===2?' 💀 全力解放':boss.phase===1?' ⚡ RAGE':'';
+    ctx.fillStyle='#fff';ctx.fillText(`${label}　${boss.hp} / ${boss.maxHp}${rageTag}`,bbx+bbw/2,bby+bbh/2);
+  });
+
+  // ── Stage / Wave ──
+  const st=COMBAT_STAGES[cmStage];
+  ctx.textAlign='right';ctx.font='bold 11px Orbitron,monospace';ctx.fillStyle='#ff9966';
+  ctx.fillText(`STAGE ${cmStage+1}/${COMBAT_STAGES.length}`,w-14,15);
+  if(st&&st.waves.length>1){
+    ctx.font='bold 10px Orbitron,monospace';ctx.fillStyle='#ffdd88';
+    ctx.fillText(`WAVE ${cmWave+1}/${st.waves.length}`,w-14,29);
+  }else if(st){
+    ctx.font='9px Noto Sans TC';ctx.fillStyle='rgba(255,255,255,.3)';ctx.fillText(st.name,w-14,29);
+  }
+
+  // ── F鍵技能冷卻指示器 (circular) ──
+  {
+    const sk=CM_FSKILLS[cmSelFSkill];
+    const ready=cmDashCD<=0;
+    const cx2=14+30,cy2=h-48,rad=26;
+    const frac=ready?1:1-cmDashCD/(sk.cd*cmCDMult);
+    // Background disc
+    ctx.beginPath();ctx.arc(cx2,cy2,rad,0,Math.PI*2);
+    ctx.fillStyle='rgba(0,0,0,.6)';ctx.fill();
+    // Cooldown ring (depleted portion dim, filled portion bright)
+    ctx.beginPath();ctx.arc(cx2,cy2,rad-3,0,Math.PI*2);
+    ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=4;ctx.stroke();
+    if(!ready){
+      ctx.beginPath();
+      ctx.arc(cx2,cy2,rad-3,-Math.PI/2,-Math.PI/2+Math.PI*2*frac);
+      ctx.strokeStyle=sk.color;ctx.lineWidth=4;ctx.lineCap='round';ctx.stroke();
+    }else{
+      const pulse=0.5+Math.sin(Date.now()/180)*0.5;
+      ctx.shadowColor=sk.color;ctx.shadowBlur=8+pulse*8;
+      ctx.beginPath();ctx.arc(cx2,cy2,rad-3,0,Math.PI*2);
+      ctx.strokeStyle=sk.color;ctx.lineWidth=4;ctx.stroke();
+      ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    }
+    // Outer border
+    ctx.beginPath();ctx.arc(cx2,cy2,rad,0,Math.PI*2);
+    ctx.strokeStyle=ready?'#88bbff':'rgba(255,255,255,.2)';ctx.lineWidth=1.5;ctx.stroke();
+    // Label
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    if(ready){
+      ctx.font='bold 13px Orbitron,monospace';ctx.fillStyle='#88ddff';ctx.fillText(sk.icon,cx2,cy2-6);
+      ctx.font='8px Orbitron,monospace';ctx.fillStyle=sk.color;ctx.fillText('READY',cx2,cy2+9);
+    }else{
+      ctx.font='bold 14px Orbitron,monospace';ctx.fillStyle='#fff';ctx.fillText(cmDashCD.toFixed(1),cx2,cy2-2);
+      ctx.font='8px Noto Sans TC';ctx.fillStyle='rgba(255,255,255,.45)';ctx.fillText(sk.name,cx2,cy2+12);
+    }
+  }
+
+  // ── Hotbar（仿 Minecraft，1-4 槍械 / 5 近戰(右鍵) / Q 道具）──
+  {
+    const slot=46,gap=4,n=6,total=n*slot+(n-1)*gap;
+    const hx=(w-total)/2,hy=h-slot-10;
+    for(let i=0;i<n;i++){
+      const x=hx+i*(slot+gap);
+      const isGun=i<4,isMelee=i===4,isItem=i===5;
+      const item=isGun?CM_GUNS[cmSelGuns[i]]:isMelee?CM_MELEES[cmSelMelee]:CM_ITEMS[cmSelItem];
+      const col=isGun?item.flash:isMelee?(item.color||'#4488ff'):'#ffdd66';
+      const active=isGun?i===cmGunType:isMelee;
+      // Slot background
+      ctx.fillStyle='rgba(10,12,20,.65)';ctx.fillRect(x,hy,slot,slot);
+      if(active){
+        ctx.shadowColor=col;ctx.shadowBlur=10;
+        ctx.strokeStyle='#fff';ctx.lineWidth=3;
+        ctx.strokeRect(x+1.5,hy+1.5,slot-3,slot-3);
+        ctx.shadowBlur=0;ctx.shadowColor='transparent';
+      }else{
+        ctx.strokeStyle='rgba(255,255,255,.22)';ctx.lineWidth=2;
+        ctx.strokeRect(x+1,hy+1,slot-2,slot-2);
+      }
+      // Icon
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.font='20px sans-serif';ctx.fillStyle=active?'#fff':'rgba(255,255,255,.6)';
+      ctx.fillText(item.icon,x+slot/2,hy+slot/2-3);
+      // Slot label (Minecraft 風格右上角)
+      ctx.font='bold 10px Orbitron,monospace';ctx.textAlign='right';ctx.textBaseline='top';
+      ctx.fillStyle=active?col:'rgba(255,255,255,.4)';
+      ctx.fillText(isGun?(i+1):isMelee?'右鍵':'Q',x+slot-3,hy+2);
+      // 武器等級標記
+      if(isGun&&cmGunLevels[cmSelGuns[i]]>1){
+        ctx.font='bold 10px Orbitron,monospace';ctx.textAlign='left';ctx.textBaseline='bottom';
+        ctx.fillStyle='#ffdd44';ctx.fillText('Lv'+cmGunLevels[cmSelGuns[i]],x+3,hy+slot-2);
+      }
+      // Melee 冷卻遮罩
+      if(isMelee&&item.mode==='strike'&&cmMeleeCD>0){
+        const frac=cmMeleeCD/item.cd;
+        ctx.fillStyle='rgba(0,0,0,.55)';
+        ctx.fillRect(x,hy+slot*(1-frac),slot,slot*frac);
+      }
+      // 道具冷卻遮罩
+      if(isItem&&cmSelItem>0&&cmItemCD>0){
+        const frac=cmItemCD/item.cd;
+        ctx.fillStyle='rgba(0,0,0,.6)';
+        ctx.fillRect(x,hy+slot*(1-frac),slot,slot*frac);
+        ctx.font='bold 11px Orbitron,monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillStyle='#fff';ctx.fillText(cmItemCD.toFixed(1),x+slot/2,hy+slot/2+12);
+      }
+      // 道具啟用中標示
+      if(isItem&&cmItemBuffT>0){
+        ctx.shadowColor='#ffdd66';ctx.shadowBlur=10;
+        ctx.strokeStyle='#ffdd66';ctx.lineWidth=3;
+        ctx.strokeRect(x+1.5,hy+1.5,slot-3,slot-3);
+        ctx.shadowBlur=0;ctx.shadowColor='transparent';
+      }
+    }
+    // 分隔線：槍械 / 近戰 / 道具
+    ctx.strokeStyle='rgba(255,255,255,.3)';ctx.lineWidth=1;
+    const mid1=hx+4*(slot+gap)-gap/2,mid2=hx+5*(slot+gap)-gap/2;
+    ctx.beginPath();ctx.moveTo(mid1,hy-4);ctx.lineTo(mid1,hy+slot+4);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(mid2,hy-4);ctx.lineTo(mid2,hy+slot+4);ctx.stroke();
+  }
+
+  // ── 不死圖騰持有數量（右下角）──
+  if(cmReviveCharge>0){
+    const rx=w-14,ry=h-14;
+    ctx.textAlign='right';ctx.textBaseline='bottom';
+    const pulse=0.5+Math.sin(Date.now()/200)*0.5;
+    ctx.shadowColor='#ffdd44';ctx.shadowBlur=8+pulse*8;
+    ctx.font='22px sans-serif';ctx.fillStyle='#ffdd44';
+    ctx.fillText('🗿',rx,ry);
+    ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    ctx.font='bold 12px Orbitron,monospace';ctx.fillStyle='#fff';
+    ctx.fillText('x'+cmReviveCharge,rx-26,ry);
+  }
+
+  // ── 中央大型提示 ──
+  if(cmBigMsg){
+    const fade=cmBigMsg.life<0.5?cmBigMsg.life/0.5:cmBigMsg.life>1.8?(2.2-cmBigMsg.life)/0.4:1;
+    ctx.save();
+    ctx.globalAlpha=Math.max(0,Math.min(1,fade));
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font='bold 26px Orbitron,monospace';
+    ctx.shadowColor=cmBigMsg.color;ctx.shadowBlur=18;
+    ctx.fillStyle=cmBigMsg.color;
+    ctx.fillText(cmBigMsg.text,w/2,h*0.32);
+    ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    ctx.restore();
   }
 }
 </script>
