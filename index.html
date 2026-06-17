@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>彈幕生存 v6</title>
+<title>彈幕生存 Beta V0.6.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;user-select:none}
@@ -426,7 +426,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   <div id="mnp-home" class="mn-page active">
     <div class="oi" style="justify-content:center">
       <div class="logo logo-anim" style="margin-top:32px">彈幕生存</div>
-      <div class="logo-s">BULLET HELL SURVIVAL · v6.0</div>
+      <div class="logo-s">BULLET HELL SURVIVAL · Beta V0.6.1</div>
       <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:320px;margin-top:30px">
         <button class="mb-nav pri" onclick="showMenuPage('mnp-free')">
           <span class="mn-icon">▶</span>
@@ -1449,8 +1449,8 @@ function endGame(){
 let stageMode=false;
 let stageIdx=0;
 let stageTimer=0;
-// 預設全50關解鎖
-const _defaultClears=Array.from({length:50},(_,i)=>i);
+// 預設只解鎖第一關，其餘由通關記錄解鎖
+const _defaultClears=[0];
 let stageBestClears=(()=>{try{const s=JSON.parse(localStorage.getItem('bhStageClears'));if(Array.isArray(s)&&s.length>0)return s;}catch(e){}return [..._defaultClears];})();
 let stageTotalScore=0;
 
@@ -1579,7 +1579,6 @@ function buildStageUI(){
 }
 
 function checkStarUnlock(){
-  return true; // TEST: always unlocked
   for(let i=0;i<50;i++)if((stageStarsEarned[i]||0)<3)return false;
   return true;
 }
