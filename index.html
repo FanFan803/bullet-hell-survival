@@ -2777,28 +2777,28 @@ const COMBAT_STAGES=[
 // bg: 背景漸層／格線色　ambient: 環境粒子類型　tint: 敵人顏色疊加　status: 被攻擊時附加的特殊狀態
 const CM_WORLDS=[
   {name:'第一世界',sub:'前線基地',icon:'🏔',color:'#ff6666',stages:[0,1,2,3,4],
-   bg:{top:'#0a0d16',bottom:'#1a1422',grid:'rgba(255,120,120,.025)'},ambient:'spark',tint:null,status:null,
+   bg:{top:'#1c2236',bottom:'#332940',grid:'rgba(255,140,140,.04)'},ambient:'spark',tint:null,status:null,
    statusDesc:'無特殊狀態 — 標準戰場'},
   {name:'第二世界',sub:'霓虹叢林',icon:'🌲',color:'#44dd99',stages:[5,6,7,8,9],
-   bg:{top:'#04140f',bottom:'#0a2a1c',grid:'rgba(80,255,170,.03)'},ambient:'leaf',tint:'#225544',status:'poison',
+   bg:{top:'#0e3326',bottom:'#1c5440',grid:'rgba(120,255,180,.05)'},ambient:'leaf',tint:'#225544',status:'poison',
    statusDesc:'🍃 中毒：受到敵人攻擊後，3秒內持續扣血'},
   {name:'第三世界',sub:'荒蕪沙地',icon:'🏜',color:'#ffaa44',stages:[10,11,12,13,14],
-   bg:{top:'#1a1106',bottom:'#2e1c08',grid:'rgba(255,180,80,.03)'},ambient:'sand',tint:'#664422',status:'sandstorm',
+   bg:{top:'#3a2710',bottom:'#5c3c14',grid:'rgba(255,200,100,.045)'},ambient:'sand',tint:'#664422',status:'sandstorm',
    statusDesc:'🏜 沙塵暴：場景偶爾揚起沙塵，短暫降低視野'},
   {name:'第四世界',sub:'極寒雪域',icon:'❄',color:'#66ccff',stages:[15,16,17,18,19],
-   bg:{top:'#060e1a',bottom:'#0e1f33',grid:'rgba(120,200,255,.03)'},ambient:'snow',tint:'#335566',status:'slow',
+   bg:{top:'#152a45',bottom:'#274a6c',grid:'rgba(150,220,255,.045)'},ambient:'snow',tint:'#335566',status:'slow',
    statusDesc:'❄ 凍傷：受到敵人攻擊後，2秒內移動速度降低'},
   {name:'第五世界',sub:'熔岩核心',icon:'🌋',color:'#ff4444',stages:[20,21,22,23,24],
-   bg:{top:'#1a0604',bottom:'#330a06',grid:'rgba(255,90,60,.035)'},ambient:'ember',tint:'#552211',status:'burn',
+   bg:{top:'#3a1208',bottom:'#5c1c0c',grid:'rgba(255,120,80,.05)'},ambient:'ember',tint:'#552211',status:'burn',
    statusDesc:'🔥 灼燒：受到敵人攻擊後，3秒內持續燒傷扣血'},
   {name:'第六世界',sub:'機械要塞',icon:'🤖',color:'#8899ff',stages:[25,26,27,28,29],
-   bg:{top:'#080a1a',bottom:'#12183a',grid:'rgba(140,160,255,.03)'},ambient:'spark',tint:'#33335a',status:'slow',
+   bg:{top:'#1c2050',bottom:'#2e3470',grid:'rgba(160,180,255,.05)'},ambient:'spark',tint:'#33335a',status:'slow',
    statusDesc:'⚡ 電擊：受到敵人攻擊後，2秒內移動速度降低'},
   {name:'第七世界',sub:'深海遺跡',icon:'🌊',color:'#33aaff',stages:[30,31,32,33,34],
-   bg:{top:'#040e1a',bottom:'#082238',grid:'rgba(60,180,255,.03)'},ambient:'leaf',tint:'#1f4a66',status:'poison',
+   bg:{top:'#0e2c45',bottom:'#1a4a6c',grid:'rgba(100,200,255,.05)'},ambient:'leaf',tint:'#1f4a66',status:'poison',
    statusDesc:'☣ 毒水：受到敵人攻擊後，3秒內持續扣血'},
   {name:'第八世界',sub:'星界深淵',icon:'🌌',color:'#cc66ff',stages:[35,36,37,38,39],
-   bg:{top:'#0a0414',bottom:'#1c0a30',grid:'rgba(200,120,255,.035)'},ambient:'ember',tint:'#442266',status:'burn',
+   bg:{top:'#2a1448',bottom:'#42206c',grid:'rgba(220,140,255,.055)'},ambient:'ember',tint:'#442266',status:'burn',
    statusDesc:'☄ 星火灼燒：受到敵人攻擊後，3秒內持續燒傷扣血'}
 ];
 function cmWorldOf(stageIdx){
@@ -2843,8 +2843,8 @@ function saveCombatProgress(){
 // 通關獎勵經驗值：基礎值依關卡難度遞增，重複通關遞減（仿貓咪大戰爭）
 function cmAwardStageXP(stageIdx){
   const clears=cmStageClears[stageIdx]||0;
-  const base=20+stageIdx*4;
-  const xp=Math.max(5,Math.round(base/(1+clears*0.6)));
+  const base=(20+stageIdx*4)*5;
+  const xp=Math.max(25,Math.round(base/(1+clears*0.6)));
   cmStageClears[stageIdx]=clears+1;
   cmXP+=xp;saveCombatProgress();
   return xp;
